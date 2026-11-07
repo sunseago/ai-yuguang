@@ -17,9 +17,6 @@ static int gSelected = 0;
 static int gBrightIdx = 1;
 static const uint8_t kBrightSteps[] = {30, 60, 100};
 
-static uint32_t gLastFetch = 0;
-static uint32_t gLastNet = 0;
-static uint32_t gLastOk = 0;
 static uint32_t gLastRender = 0;
 static uint32_t gLastBeat = 0;
 static bool gDirty = true;
@@ -27,6 +24,11 @@ static bool gLastOnline = false;
 static bool gScreenOn = true;
 static uint8_t gLastRot = 0;
 static bool gImuOk = false;
+
+// 主循环的"最长停顿"。心跳里打出来，这样"卡住"这件事有数字可看，
+// 不用靠手感猜——触摸丢点、转屏迟钝都是它的下游症状。
+static uint32_t gLastLoopAt = 0;
+static uint32_t gMaxGap = 0;
 
 // 熄屏/亮屏统一走这里，保证亮度只在这一个地方被清零
 static void setScreenOn(bool on) {
@@ -123,7 +125,8 @@ void setup() {
   Serial.printf("[dp] wifi=%d ip=%s bridge=%s\n", (int)netOnline(), netIp(), netBridgeHost());
 
   if (netFetch(gModel)) {
-    gLastOk = millis();
+    // 先把这一份交给后台任务，否则任务第一次判离线时会把界面清空
+    netPublishInitial(gModel);
     gModel.bridgeOnline = true;
     Serial.printf("[dp] first fetch ok, providers=%d\n", gModel.count);
     for (int i = 0; i < gModel.count; i++) {
@@ -143,7 +146,7 @@ void setup() {
   } else {
     Serial.println("[dp] first fetch FAILED (bridge unreachable?)");
   }
-  gLastFetch = millis();
+  netStartPolling();   // 网络从此在 core 0 的独立任务里跑
   render();
 }
 
@@ -152,27 +155,12 @@ void loop() {
 
   uint32_t now = millis();
 
-  if (now - gLastNet > 500) {
-    gLastNet = now;
-    netLoop();
-  }
-
-  if (now - gLastFetch >= 2000) {
-    gLastFetch = now;
-    DpModel fresh;
-    if (netFetch(fresh)) {
-      gModel = fresh;
-      gModel.bridgeOnline = true;
-      gLastOk = now;
-      if (gSelected >= gModel.count) gSelected = 0;
-      gDirty = true;
-    } else if (now - gLastOk > 10000) {
-      if (gModel.bridgeOnline) {
-        gDirty = true;
-        Serial.println("[dp] bridge LOST");
-      }
-      gModel.bridgeOnline = false;
-    }
+  // 网络在后台任务里跑，这里只是取一份快照 —— 主循环再也不会被 HTTP 阻塞。
+  // 之前 http.GET() 直接跑在这儿，主机不回应时每 2 秒冻结 2.5 秒，
+  // 触摸、转屏、重绘全被饿死（就是用户说的"NO LINK 后卡住"）。
+  if (netTakeSnapshot(gModel)) {
+    if (gSelected >= gModel.count) gSelected = 0;
+    gDirty = true;
   }
 
   if (gModel.bridgeOnline != gLastOnline) {
@@ -189,6 +177,8 @@ void loop() {
                      (unsigned long)(now / 1000), (int)netOnline(), (int)gModel.bridgeOnline,
                      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(),
                      (unsigned)displayRotation(), gImuOk ? "ok" : "--", powerLabel());
+    n += snprintf(beat + n, sizeof(beat) - n, " gap=%lums", (unsigned long)gMaxGap);
+    gMaxGap = 0;
     if (gImuOk) {
       float ax, ay, az, ip;
       imuLastSample(ax, ay, az, ip);
@@ -312,6 +302,23 @@ void loop() {
   if (gDirty || now - gLastRender > frameMs) {
     gDirty = false;
     render();
+  }
+
+  // 量一下这一圈花了多久。卡顿的元凶是循环里有阻塞调用，
+  // 把它打出来比"感觉卡"有用得多。
+  {
+    uint32_t t = millis();
+    if (gLastLoopAt) {
+      uint32_t gap = t - gLastLoopAt;
+      if (gap > gMaxGap) gMaxGap = gap;
+      // 超过 150ms 就当场报一次：正常一圈约 10~60ms，超过说明有阻塞调用。
+      // 只打异常，平时不占串口。
+      if (gap > 150) {
+        Serial.printf("[dp] LOOP STALL %lums at t=%lus\n", (unsigned long)gap,
+                      (unsigned long)(t / 1000));
+      }
+    }
+    gLastLoopAt = t;
   }
 
   delay(10);

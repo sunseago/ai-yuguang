@@ -325,3 +325,99 @@ void netClearConfig() {
   s_prefs.clear();
   s_prefs.end();
 }
+
+// ---------- 后台轮询任务 ----------
+//
+// 为什么要有这个东西：http.GET() 是同步的，一次请求最长能占 2.5 秒
+// （connect 2.5s + read 2.5s）。它原来跑在 loop() 里，实测在"主机可达但不回应"
+// （比如 Mac 睡过去）时，每 2 秒就冻结界面 2.5 秒，串口里是一串 LOOP STALL 25xx ms。
+// 后果是三件事一起坏：
+//   · 触摸靠按下/抬起的边沿检测 → 整个手势落在冻结窗口里就丢了
+//   · imuPoll 每 200ms 一次、且要连续 5 次一致才转向 → 采样被拉开，转屏要等很久
+//   · 重绘被推迟 → 看起来就是"卡死"
+//
+// 现在网络在 core 0 的任务里跑，UI 只在 loop() 里读一份快照，永不阻塞。
+
+namespace {
+
+struct NetShare {
+  DpModel model;
+  bool online;
+  uint32_t seq;   // 每发布一次自增，UI 侧据此判断"有没有新数据"
+};
+
+NetShare s_share;
+portMUX_TYPE s_shareMux = portMUX_INITIALIZER_UNLOCKED;
+
+void publishModel(const DpModel& m, bool online) {
+  portENTER_CRITICAL(&s_shareMux);
+  s_share.model = m;
+  s_share.online = online;
+  s_share.seq++;
+  portEXIT_CRITICAL(&s_shareMux);
+}
+
+void publishOffline() {
+  portENTER_CRITICAL(&s_shareMux);
+  // 只在状态真的变化时自增，免得 UI 每 2 秒都白拷一遍 1KB
+  if (s_share.online) {
+    s_share.online = false;
+    s_share.seq++;
+  }
+  portEXIT_CRITICAL(&s_shareMux);
+}
+
+void netTask(void*) {
+  uint32_t lastLoopCheck = 0;
+  uint32_t lastFetch = 0;
+  uint32_t lastOk = 0;
+
+  for (;;) {
+    const uint32_t now = millis();
+
+    if (now - lastLoopCheck > 500) {
+      lastLoopCheck = now;
+      netLoop();
+    }
+
+    if (now - lastFetch >= 2000) {
+      lastFetch = now;
+      DpModel fresh;
+      if (netFetch(fresh)) {
+        lastOk = now;
+        publishModel(fresh, true);
+      } else if (now - lastOk > 10000) {
+        // 连续 10 秒拿不到才判离线，避免偶发丢包就闪 NO LINK
+        publishOffline();
+      }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
+}  // namespace
+
+void netPublishInitial(const DpModel& m) {
+  publishModel(m, true);
+}
+
+void netStartPolling() {
+  // core 0 留给网络；Arduino 的 loopTask（UI、触摸、IMU、SPI）在 core 1，互不抢占。
+  // 栈给 10KB：HTTPClient + ArduinoJson 在任务栈上，8KB 偏紧。
+  xTaskCreatePinnedToCore(netTask, "dp-net", 10240, nullptr, 1, nullptr, 0);
+}
+
+bool netTakeSnapshot(DpModel& out) {
+  static uint32_t seen = 0;
+  bool changed = false;
+  portENTER_CRITICAL(&s_shareMux);
+  if (s_share.seq != seen) {
+    out = s_share.model;
+    out.bridgeOnline = s_share.online;
+    seen = s_share.seq;
+    changed = true;
+  }
+  portEXIT_CRITICAL(&s_shareMux);
+  return changed;
+}
