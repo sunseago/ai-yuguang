@@ -1,11 +1,19 @@
-// WorkBuddy 适配器：只读打开 workbuddy.db，取「最新会话状态 + 上下文占用 + credit 记账」
+// AI余光 WorkBuddy 适配器：只读打开 workbuddy.db，取「最新会话状态 + 上下文占用 + credit 记账」
 // 注意：官方没有「剩余额度」接口，这里的额度口径是「本期已用 credit / 用户设定预算」。
 import { DatabaseSync } from 'node:sqlite';
+import { createApprovalWatcher } from '../lib/approval.mjs';
 import { expandHome, truncateChars } from '../lib/util.mjs';
 
 let db = null;
 let dbPath = null;
 let lastError = null;
+
+// ---------- 权限弹框 / 提问检测 ----------
+// JSONL 的解析、增量 offset、半行处理都在 lib/approval.mjs 里，纯文件操作、可单测。
+// 这里只负责两件事：告诉它审计日志在哪、把「正在等」翻译成 awaiting 状态。
+const approvals = createApprovalWatcher((cfg) =>
+  expandHome(cfg.auditLogDir || '~/.workbuddy/audit-log')
+);
 
 function open(cfg) {
   const p = expandHome(cfg.dbPath);
@@ -135,6 +143,15 @@ export function readWorkBuddy(cfg, opts) {
 
     const since = periodStart(cfg.budgetPeriod || 'month');
     provider.quota.used = Math.round(sumCredits(handle, since) * 100) / 100;
+
+    // 有弹框在等你 → 覆盖会话状态。这是当下最紧急的事实：
+    // 会话可能还写着 working，其实它早就卡在等人点「允许」了。
+    const appr = approvals.poll(cfg, opts?.awaitExpireMs ?? 300000);
+    if (appr) {
+      provider.state = 'awaiting';
+      provider.state_since = appr.at;
+    }
+
     provider.health = 'ok';
     lastError = null;
   } catch (e) {

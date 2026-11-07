@@ -25,3 +25,6 @@ void uiRender(Canvas& c, const UiInput& in);
 
 // 命中测试：返回卡片下标，-1 表示没点到卡片
 int uiHitCard(const DpModel& m, int x, int y);
+
+// 是否有卡片正在"等确认"的呼吸闪烁中（据此决定要不要加快重绘）
+bool uiWantsFastRedraw(const DpModel& m, uint64_t nowMs);

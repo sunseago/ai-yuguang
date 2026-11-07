@@ -143,6 +143,29 @@ int main() {
   uiRender(gCanvas, in);
   writePPM("preview_offline.ppm", gBuf);
 
-  printf("wrote 5 previews\n");
+  // 第六、七张：等确认时的"呼吸"——亮 / 暗两帧各一张，肉眼对比。
+  // 时间是算出来的，不是随手填的：in.nowMs / 500 的奇偶决定亮暗，
+  // 所以取 1000 的整数倍保证落到"亮"，再 +500 就是"暗"，可复现。
+  m.bridgeOnline = true;
+  m.items[0].state = DP_ST_AWAITING;
+  m.items[1].state = DP_ST_THINKING;
+  m.items[2].state = DP_ST_IDLE;
+  const uint64_t tOn = (m.bridgeTs / 1000) * 1000;
+  m.items[0].stateSinceMs = tOn - 5000;  // 5 秒前开始等，还在闪（未满 30 秒）
+  in.nowMs = tOn;
+  uiRender(gCanvas, in);
+  writePPM("preview_await_on.ppm", gBuf);
+
+  in.nowMs = tOn + 500;
+  uiRender(gCanvas, in);
+  writePPM("preview_await_off.ppm", gBuf);
+
+  // 第八张：等超过 30 秒之后——应该不再闪，常亮。（把 nowMs 推后 40 秒）
+  m.items[0].stateSinceMs = tOn - 40000;
+  in.nowMs = tOn + 500;  // 故意取"暗"的相位，验证常亮压过了闪烁
+  uiRender(gCanvas, in);
+  writePPM("preview_await_steady.ppm", gBuf);
+
+  printf("wrote 8 previews\n");
   return 0;
 }

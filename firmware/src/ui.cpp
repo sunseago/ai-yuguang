@@ -12,6 +12,14 @@ constexpr int kCardY0 = 22;
 constexpr int kCardGap = 6;
 constexpr int kBarY = 18;
 
+// 等待确认（agent 弹框问你要权限/问你问题）时的呼吸节奏。
+//
+// 为什么先闪 30 秒再常亮，而不是一直闪：这块屏是摆在桌上全天看着的，
+// 红了半小时还在晃，人会开始主动无视它——那比不提醒更糟。
+// 闪 30 秒足够把注意力拉过来，之后转常亮表示"还等着呢，但你不用被它催"。
+constexpr uint64_t kAwaitBlinkMs = 30000;
+constexpr uint64_t kBlinkHalfMs = 500;   // 1 Hz：亮 0.5s、暗 0.5s
+
 uint16_t healthColor(uint8_t h) {
   switch (h) {
     case DP_H_WARN: return dpcolor::WAIT;
@@ -23,19 +31,24 @@ uint16_t healthColor(uint8_t h) {
 
 // ---- 状态胶囊 ----
 // 任务进行中（THINKING/TOOL）用红底白字，结束（DONE）绿底白字，其余压成浅灰不去抢眼。
-// AWAITING 单独用琥珀色：它是"等你确认"，不是"正在跑"，配色上区分开更有用。
+//
+// AWAITING 是"等你确认"，它会呼吸：亮的时候实心红，暗的时候淡红底 + 红字。
+// 注意暗的那一半**不能整格消失**——那会变成"闪没了"，你还是看不出这张卡在等人。
+// 用红而不是原来的琥珀，是因为琥珀在浅色卡片上太温和，扫一眼根本注意不到；
+// 而 ERROR 也是红，靠"闪 vs 不闪"区分，不用再加一种颜色。
 struct BadgeStyle {
   uint16_t fill;
   uint16_t text;
 };
 
-BadgeStyle badgeStyle(uint8_t s) {
+BadgeStyle badgeStyle(uint8_t s, bool lit = true) {
   switch (s) {
     case DP_ST_THINKING:
     case DP_ST_TOOL:
       return {dpcolor::RUN, dpcolor::WHITE};
     case DP_ST_AWAITING:
-      return {dpcolor::WAIT, dpcolor::WHITE};
+      return lit ? BadgeStyle{dpcolor::RUN, dpcolor::WHITE}
+                 : BadgeStyle{dpcolor::RUN_SOFT, dpcolor::RUN};
     case DP_ST_DONE:
       return {dpcolor::DONE, dpcolor::WHITE};
     case DP_ST_ERROR:
@@ -47,11 +60,23 @@ BadgeStyle badgeStyle(uint8_t s) {
   }
 }
 
+// 这个状态已经持续多久。stateSinceMs 是桥接给的 epoch 时间，
+// 和 in.nowMs（同样校时过）可以直接相减；桥接没给就退化成 0。
+uint64_t stateAgeMs(const DpProvider& p, uint64_t nowMs) {
+  return nowMs > p.stateSinceMs ? nowMs - p.stateSinceMs : 0;
+}
+
+// 此刻该"亮"还是"暗"。超过 30 秒恒亮。
+bool awaitingLit(const DpProvider& p, uint64_t nowMs) {
+  if (stateAgeMs(p, nowMs) >= kAwaitBlinkMs) return true;
+  return ((nowMs / kBlinkHalfMs) & 1ULL) == 0;
+}
+
 // 画一枚圆角状态标签（胶囊），返回它占的宽度。
 // 圆角半径取高度的一半，scale=1/2 都是正圆头。
-int drawStateBadge(Canvas& c, int x, int y, uint8_t state, int scale) {
+int drawStateBadge(Canvas& c, int x, int y, uint8_t state, int scale, bool lit = true) {
   const char* t = dpStateLabel(state);
-  const BadgeStyle b = badgeStyle(state);
+  const BadgeStyle b = badgeStyle(state, lit);
   const int padX = scale >= 2 ? 9 : 6;
   const int th = c.textHeight(scale);
   const int h = th + (scale >= 2 ? 4 : 2);
@@ -120,10 +145,19 @@ void quotaLine(const DpProvider& p, char* prefix, size_t prefixN, char* big, siz
 
 void drawCard(Canvas& c, const DpProvider& p, int y, bool highlight, uint64_t nowMs,
               uint8_t st) {
-  c.roundRect(kCardX, y, kCardW, kCardH, 8, dpcolor::LINE,
-              highlight ? dpRGB(0xEC, 0xF1, 0xF9) : dpcolor::CARD);
+  // 等确认时整张卡的描边也一起呼吸，和胶囊同步 —— 余光扫过去先看到的是边框在跳
+  const bool awaiting = (st == DP_ST_AWAITING);
+  const bool lit = awaiting ? awaitingLit(p, nowMs) : true;
+  const uint16_t edge = awaiting ? (lit ? dpcolor::RUN : dpcolor::RUN_SOFT) : dpcolor::LINE;
+  const uint16_t fill = highlight ? dpRGB(0xEC, 0xF1, 0xF9) : dpcolor::CARD;
+
+  c.roundRect(kCardX, y, kCardW, kCardH, 8, edge, fill);
+  if (awaiting) {
+    // 再套一道内圈凑成 2px：1px 的线在 240 像素的屏上几乎看不见
+    c.roundRect(kCardX + 1, y + 1, kCardW - 2, kCardH - 2, 7, edge, fill);
+  }
   // 左侧色条跟状态标签同色，一眼就能扫出哪张卡在跑、哪张已经完成
-  const BadgeStyle bs = badgeStyle(st);
+  const BadgeStyle bs = badgeStyle(st, lit);
   c.fillRect(kCardX + 1, y + 10, 3, kCardH - 20,
              st == DP_ST_OFFLINE ? dpcolor::FAINT : bs.fill);
 
@@ -153,7 +187,7 @@ void drawCard(Canvas& c, const DpProvider& p, int y, bool highlight, uint64_t no
   // 第二行：状态胶囊 + 任务摘要
   const int bx = kCardX + 10;
   const int by = y + 32;
-  const int badgeW = drawStateBadge(c, bx, by, st, 1);
+  const int badgeW = drawStateBadge(c, bx, by, st, 1, lit);
   const char* tail = (st == DP_ST_TOOL && p.tool[0]) ? p.tool : p.title;
   const int tx = bx + badgeW + 6;
   const int tailW = kCardX + kCardW - 9 - tx;
@@ -172,7 +206,6 @@ void drawCard(Canvas& c, const DpProvider& p, int y, bool highlight, uint64_t no
   }
   if (st == DP_ST_OFFLINE) barColor = dpcolor::LINE;
   c.bar(kCardX + 10, y + kCardH - 7, kCardW - 18, 3, frac, barColor, dpcolor::TRACK);
-  (void)nowMs;
 }
 
 void overview(Canvas& c, const UiInput& in) {
@@ -332,4 +365,16 @@ int uiHitCard(const DpModel& m, int x, int y) {
     if (y >= cy && y < cy + kCardH && x >= kCardX && x < kCardX + kCardW) return i;
   }
   return -1;
+}
+
+// 有卡片正在呼吸时才值得提高重绘频率；其余情况维持 1 秒一次。
+// 单独抽出来是给 main 的节流逻辑用 —— 让"要不要快刷"这件事只有一个判据，
+// 免得绘制端在闪、调度端还按 1 秒刷，看起来一顿一顿的。
+bool uiWantsFastRedraw(const DpModel& m, uint64_t nowMs) {
+  if (!m.bridgeOnline) return false;
+  for (int i = 0; i < m.count && i < 3; i++) {
+    if (m.items[i].state != DP_ST_AWAITING) continue;
+    if (stateAgeMs(m.items[i], nowMs) < kAwaitBlinkMs) return true;
+  }
+  return false;
 }

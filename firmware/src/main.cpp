@@ -36,6 +36,9 @@ static void setScreenOn(bool on) {
   if (on) gDirty = true;
 }
 
+// 定义在下面（render 之后），这里先声明——render 和主循环都要用
+uint64_t bridgeNowMs();
+
 static void render() {
   UiInput in{};
   in.model = &gModel;
@@ -43,11 +46,7 @@ static void render() {
   in.selected = gSelected;
   in.pendingIndex = -1;
   // 用「桥接时间 + 本地已过时长」推算，秒数才会自己走，而不是每次拉取才跳一下
-  uint64_t nowMs = 0;
-  if (gModel.bridgeOnline && gModel.bridgeTs) {
-    nowMs = gModel.bridgeTs + (uint64_t)(millis() - gModel.localStampMs);
-  }
-  in.nowMs = nowMs;
+  in.nowMs = bridgeNowMs();
   in.wifiOk = netOnline();
   in.rssi = netRssi();
   in.bridgeHost = netBridgeHost();
@@ -63,6 +62,13 @@ static void render() {
   uiRender(gCanvas, in);
   displayPush(gCanvas.buffer());
   gLastRender = millis();
+}
+
+// 桥接时间 + 本机已过时长。用这个而不是直接拿 device millis()：
+// state_since 是 epoch，两边不同基准，只有换成同一套时钟才能算"等了多久"。
+uint64_t bridgeNowMs() {
+  if (!gModel.bridgeOnline || !gModel.bridgeTs) return 0;
+  return gModel.bridgeTs + (uint64_t)(millis() - gModel.localStampMs);
 }
 
 static void splash() {
@@ -300,8 +306,10 @@ void loop() {
     gDirty = true;
   }
 
-  // 每秒重绘一次（走表/呼吸），有变化也立刻重绘
-  if (gDirty || now - gLastRender > 1000) {
+  // 平时 1 秒一帧就够（走表、心跳）。有卡片在"等确认"呼吸时提到 250ms——
+  // 1 Hz 的闪烁如果按 1 秒刷新，会变成一顿一顿的，看不出是"呼吸"。
+  const uint32_t frameMs = uiWantsFastRedraw(gModel, bridgeNowMs()) ? 250 : 1000;
+  if (gDirty || now - gLastRender > frameMs) {
     gDirty = false;
     render();
   }

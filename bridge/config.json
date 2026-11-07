@@ -5,6 +5,7 @@
   "quotaIntervalMs": 60000,
   "idleAfterMs": 300000,
   "doneAfterMs": 180000,
+  "awaitExpireMs": 300000,
   "exposeTitle": true,
   "providers": {
     "workbuddy": {

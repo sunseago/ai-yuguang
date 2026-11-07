@@ -11,11 +11,11 @@
 显示在桌上的 Waveshare ESP32-S3-Touch-LCD-1.54（240×240）小屏上。
 抬眼扫一下就知道，不用切窗口、不用掏手机。
 
-| 总览（三张卡） | 单个详情 | 状态胶囊 |
-| --- | --- | --- |
-| ![](docs/preview/preview_overview.png) | ![](docs/preview/preview_detail.png) | ![](docs/preview/preview_states.png) |
+| 总览（三张卡） | 单个详情 | 状态胶囊 | 等确认在闪 |
+| --- | --- | --- | --- |
+| ![](docs/preview/preview_overview.png) | ![](docs/preview/preview_detail.png) | ![](docs/preview/preview_states.png) | ![](docs/preview/preview_await_on.png) |
 
-`IDLE` 灰、`THINKING`/`TOOL` 红、`DONE` 绿、`OFFLINE` 褪成浅灰——
+`IDLE` 灰、`THINKING`/`TOOL` 红、`DONE` 绿、`WAIT` 红闪、`OFFLINE` 褪成浅灰——
 **桥接断了就不装活着**，数字一起变灰，不会拿上一次的存量骗你。
 
 ## 它是怎么工作的
@@ -54,6 +54,7 @@ Kimi(余额 API + 进程)   ┘
 | 陀螺仪（QMI8658）自动转屏 + 触摸同步逆变换 | ✅ 已烧录，`imu=ok`，方向映射已验证自洽 |
 | 插电脑不熄屏 / 供电来源识别 | ✅ `pwr=USB 100%`，默认永不熄屏 |
 | Mac 菜单栏 App（自带 node，一键安装） | ✅ 实测通过：开机自启 / 崩溃自愈 / 孤儿进程回收 |
+| agent 弹框时卡片红闪提醒（WorkBuddy） | ✅ 已端到端验证（审计日志 → 桥接 → 屏显 `WAIT`） |
 | 阈值蜂鸣、OTA、USB 兜底通道 | ⬜ 未做（原 P1） |
 
 ---
@@ -269,12 +270,46 @@ python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bi
 | --- | --- | --- |
 | `THINKING` / `TOOL` | 🟥 红底白字 `#DC3535` | 任务进行中 |
 | `DONE` | 🟩 绿底白字 `#10B981` | 任务结束 |
-| `WAIT`（awaiting） | 🟨 琥珀底白字 `#F59E0B` | 在等你确认，不是"正在跑" |
+| `WAIT`（awaiting） | 🟥 **红底白字，会闪** | **agent 弹框问你要权限，卡在等你点头** |
 | `ERROR` | 🟥 红底白字 `#EF4444` | 出错 |
 | `IDLE` / `OFFLINE` | ⬜ 浅灰底深灰字 | 空转，压下去不抢眼 |
 
-琥珀色是刻意留的：`AWAITING` 是"卡在等你点头"，跟"正在跑"不是一回事，用同一个红会丢信息。
-配色集中在 `ui.cpp` 的 `badgeStyle()` 一处，改颜色只动那张表。
+`WAIT` 和 `ERROR` 都是红，靠**动与静**区分：`WAIT` 会呼吸，`ERROR` 是常亮。
+不用再加一种颜色，因为多一种色就是在增加辨认成本。
+
+### 弹框提醒（`WAIT` 的呼吸）
+
+三个 agent 干活时都会弹框要权限或者问你问题，但**你人不在电脑前就看不到**。所以：
+
+- 卡片描边和胶囊一起以 **1 Hz 呼吸**，左侧色条同步——余光扫过去先看到边框在跳
+- **闪 30 秒后转常亮**。一直闪的话，一小时后你会开始主动无视它，那比不提醒更糟
+- 暗的那半帧是"淡红底 + 红字"，**不是消失**——否则会看成"闪没了"，还是不知道它在等人
+- 有卡片在呼吸时，重绘从 1 s 提到 250 ms；平时维持 1 s（软件旋转一帧 3–5 ms，代价可忽略）
+
+**怎么知道你在等确认**：WorkBuddy 会把安全决策写进 `~/.workbuddy/audit-log/YYYY-MM-DD.jsonl`，
+一次弹框留两条记录，靠 `toolCallId` 配对：
+
+```
+file-safety.needs-approval        ← 弹框出现
+file-safety.approved / .rejected  ← 你点了允许 / 拒绝
+```
+
+「有 needs-approval、但没有同 id 的 approved/rejected」= 此刻正在等你。实测样例（2026-11-07
+20:11:03 → 20:11:15）中间那 12 秒就是人读弹框再点允许的时间。
+
+解析在 `bridge/lib/approval.mjs`（纯文件操作，可脱离数据库单测），适配器只负责把它翻译成
+`awaiting`。**只读审计日志，不写任何东西。**
+
+覆盖到的事件族：`file-safety.*`、`file-safety.bulk-delete.*`。
+`network.*` 暂不纳入（历史日志里 `ask-matched` 35 次 / `approved` 29 次，不是一一对应，
+配对关系还没实测清楚，收进来会误报）。
+
+**只对 WorkBuddy 生效。** DeepSeek Harness 的本地会话日志里还没观察到审批事件，
+Kimi 是 Electron 应用、权限框只活在渲染层不留痕。这两家要做只能走 macOS 辅助功能 API
+读窗口，需要授权且容易随版本失效，暂时不做。
+
+配色和呼吸节奏集中在 `ui.cpp` 的 `badgeStyle()` / `awaitingLit()` / `kAwaitBlinkMs` 几处，
+改颜色和闪多久只动那里。
 
 ### 6. 屏幕方向与供电
 
@@ -368,9 +403,11 @@ deskpulse/
 │  ├─ adapters/dsh.mjs            事件日志增量解析
 │  ├─ adapters/kimi.mjs           余额 API + 进程探测
 │  ├─ lib/zstdframes.mjs          多帧 zstd 分帧解压
+│  ├─ lib/approval.mjs            从审计日志识别"正在等你确认"（纯文件，可单测）
 │  ├─ lib/quota.mjs               余额采样历史 / 日耗 / 可用天数
 │  ├─ tests/dsh-incremental.mjs   增量解析测试（含半帧）
 │  ├─ tests/contract.mjs          固件↔桥接字段契约测试
+│  ├─ tests/approval.mjs          等确认检测的单测（不需要 WorkBuddy）
 │  └─ install-launchd.sh          常驻服务
 ├─ package/
 │  ├─ main.swift                  菜单栏程序（管引擎子进程）
@@ -407,11 +444,22 @@ deskpulse/
 cd firmware
 g++ -std=c++17 -O2 -I src src/canvas.cpp src/ui.cpp tools/preview.cpp -o /tmp/preview
 cd /tmp && /tmp/preview && python3 <项目>/firmware/tools/ppm2png.py
-# 得到 preview_overview.png / preview_detail.png / preview_info.png / preview_states.png
+# 得到 8 张：overview / detail / info / states / offline / await_on / await_off / await_steady
 ```
 
 第四张 `preview_states.png` 是把 DONE / AWAITING / ERROR 三种结局摆在一起，专门看状态胶囊配色——
 改 `badgeStyle()` 之后先看这张，别直接上机（屏幕上配色错了我看不见，得靠这张图先自查）。
+
+后三张是 `WAIT` 的呼吸三帧：亮、暗、以及超过 30 秒后的常亮。
+**判据是文件哈希**：`await_on` 和 `await_steady` 必须字节完全相同（常亮压过闪烁），
+和 `await_off` 必须不同。改呼吸逻辑后直接 `md5` 对一下，比盯着屏幕猜靠谱。
+
+`WAIT` 的检测逻辑另有单测，不需要 WorkBuddy 也能跑：
+
+```bash
+cd bridge
+node tests/approval.mjs     # 配对 / 增量 / 半行 / 过期，10 项
+```
 
 这是刻意设计的：`canvas.cpp` / `ui.cpp` 不依赖 Arduino，才能在电脑上编译。
 
@@ -534,6 +582,9 @@ Kimi 的 `0/50` 来自桌面版每日额度，两者都没有配置任何 Key。
 ## 已知限制
 
 - 只支持最多 3 张卡片同屏（第 4、5 个供应商需翻页，未实现）。
+- 弹框红闪只对 **WorkBuddy** 生效。DeepSeek Harness 的日志里还没观察到审批事件；
+  Kimi 是 Electron 应用，权限框只活在渲染层、磁盘上不留痕。这两家要做只能走 macOS
+  辅助功能 API 读窗口，要用户授权且随时可能被版本更新打掉，暂时没做。
 - 长时间挂机尚未做 48 小时老化；目前 30 秒心跳观察堆内存无增长趋势。
 - Kimi 的任务进度只能到「会话是否在进行」，做不到「第几步」；
   上下文占用（`context.used/size`）已解析进模型但还没画到屏上。

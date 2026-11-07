@@ -38,7 +38,8 @@ def write_png(path, w, h, rgb):
 def main():
     scale = int(sys.argv[1]) if len(sys.argv) > 1 else 2
     for name in ['preview_overview', 'preview_detail', 'preview_info', 'preview_states',
-                 'preview_offline']:
+                 'preview_offline', 'preview_await_on', 'preview_await_off',
+                 'preview_await_steady']:
         try:
             w, h, data = read_ppm(name + '.ppm')
         except FileNotFoundError:
