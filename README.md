@@ -63,7 +63,7 @@ Kimi(余额 API + 进程)   ┘
 
 ### 0. 装成 Mac App（推荐，不用管终端）
 
-`package/dist/AI余光-0.1.0.zip` 是可直接双击的菜单栏 App，**自带 node 运行时**，
+`package/dist/AI余光-0.1.1.zip` 是可直接双击的菜单栏 App，**自带 node 运行时**，
 不需要本机装 Node，也不依赖 WorkBuddy 是否开着。
 
 ```bash
@@ -98,7 +98,7 @@ kill -9 $(lsof -nP -iTCP:8787 -sTCP:LISTEN | awk 'NR==2{print $2}')
 "/Applications/AI余光.app/Contents/MacOS/yuguang" --status
 # online=true port=8787 providers=WorkBuddy,DeepSeek,Kimi login=on
 "/Applications/AI余光.app/Contents/MacOS/yuguang" --version
-# AI余光 0.1.0
+# AI余光 0.1.1
 ```
 
 配置文件在 `~/Library/Application Support/DeskPulse/config.json`（首次启动自动生成），
@@ -114,7 +114,7 @@ kill -9 $(lsof -nP -iTCP:8787 -sTCP:LISTEN | awk 'NR==2{print $2}')
 自己重新打包：
 
 ```bash
-cd package && ./build-app.sh     # 产出 dist/AI余光.app + dist/AI余光-0.1.0.zip
+cd package && ./build-app.sh     # 产出 dist/AI余光.app + dist/AI余光-0.1.1.zip
 ```
 
 **图标**是「一只偏头用余光看人的眼睛」——名字叫 AI余光，所以画的是"看"，而且是斜着看。
@@ -203,7 +203,7 @@ cp config.json config.local.json && chmod 600 config.local.json
 ```bash
 pip install esptool
 esptool.py --chip esp32s3 -p /dev/cu.usbmodem101 -b 460800 \
-  write_flash 0x0 AIYuguang-0.1.0-esp32s3-16MB.bin
+  write_flash 0x0 AIYuguang-0.1.1-esp32s3-16MB.bin
 ```
 
 那个 `.bin` 已经把 bootloader + 分区表 + 应用合并好了，所以偏移是 `0x0`，一条命令搞定。
@@ -533,24 +533,24 @@ cd firmware && python3 tools/cap.py /dev/cu.usbmodem101 40
 ## 验证记录（2026-11-07，真机）
 
 ```
-[dp] AI余光 0.1.0 boot
+[dp] AI余光 0.1.1 boot
 [dp] psram=8386295 freeheap=327400
 [dp] canvas=ok ptr=0x3d800908          ← 画布落在 PSRAM
 [dp] touch+buttons ready
 [dp] power=USB 97% batt=detected
 [dp] imu=ok addr=0x6B rot_offset=2
-[dp] wifi connected ip=192.168.100.190 rssi=-26
+[dp] wifi connected ip=192.168.100.190 rssi=-35
 [dp] wifi=1 ip=192.168.100.190 bridge=192.168.100.151
 [dp] first fetch ok, providers=3
-[dp]   #0 WorkBuddy state=IDLE credit=207.57/100.00
-[dp]   #1 DeepSeek  state=IDLE balance=13.55 CNY spend/d=0.00 burn=-1.0
+[dp]   #0 WorkBuddy state=THINKING credit=251.19/100.00
+[dp]   #1 DeepSeek  state=DONE balance=13.54 CNY spend/d=0.01 burn=56.8
 [dp]   #2 Kimi      state=IDLE credit=0.00/50.00
 [dp] bridge ONLINE
 [dp] imu quad=3 ax=-0.81 ay=-0.02 az=-0.61 -> base=3 off=2 (rot now 2)
 [dp] rotate=1 (90 deg) ax=-0.81 ay=-0.02 az=-0.61
-[dp] t=30s wifi=1 link=1 heap=283544 psram_free=8140543 rot=1 imu=ok pwr=USB 97%
+[dp] t=30s wifi=1 link=1 heap=283448 psram_free=8140543 rot=1 imu=ok pwr=USB 97%
      g=-0.81,-0.02,-0.61 flat=0
-     | workbuddy:IDLE 208/100 | deepseek:IDLE 13.55 | kimi:IDLE 0/50
+     | workbuddy:THINKING 251/100 | deepseek:DONE 13.54 | kimi:IDLE 0/50
 ```
 
 新增的 `rot=` / `imu=` / `g=` / `pwr=` 四个字段来自转屏与供电模块：
@@ -560,7 +560,7 @@ cd firmware && python3 tools/cap.py /dev/cu.usbmodem101 40
 已确认：ST7789 显示正常（无需改 `ips` / 偏移）、PSRAM 8 MB 可用、UDP 发现有效、
 三卡数据上屏、断连 10 秒降级并在桥接恢复后自动重连。堆内存 30 秒心跳稳定在 284 KB，`link=1` 说明一直在正常取数。
 
-**零 API Key 读数已实测**：DeepSeek 的 `¥13.55` 来自桌面版登录态，
+**零 API Key 读数已实测**：DeepSeek 的 `¥13.54` 来自桌面版登录态，
 Kimi 的 `0/50` 来自桌面版每日额度，两者都没有配置任何 Key。
 
 **四向转屏已实测**（把设备依次摆到四个姿态，串口实录，`off=2` 为出厂偏移）：

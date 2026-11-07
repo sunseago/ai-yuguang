@@ -55,4 +55,4 @@
 #define BTN_USER 5   // 短按切页
 #define BTN_PWR 4    // 备用
 
-#define DP_FW_VERSION "0.1.0"
+#define DP_FW_VERSION "0.1.1"
