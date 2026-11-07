@@ -1,0 +1,39 @@
+{
+  "port": 8787,
+  "bind": "0.0.0.0",
+  "intervalMs": 2000,
+  "quotaIntervalMs": 60000,
+  "idleAfterMs": 300000,
+  "doneAfterMs": 180000,
+  "exposeTitle": true,
+  "providers": {
+    "workbuddy": {
+      "enabled": true,
+      "dbPath": "~/.workbuddy/workbuddy.db",
+      "budgetCredits": 100,
+      "budgetPeriod": "month"
+    },
+    "deepseek": {
+      "enabled": true,
+      "localAccount": true,
+      "credentialsPath": "~/.dsh/.credentials.yaml",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "apiKey": "",
+      "sessionsDir": "~/.dsh/sessions",
+      "warnBalance": 3,
+      "criticalBalance": 1
+    },
+    "kimi": {
+      "enabled": true,
+      "localSession": true,
+      "appDataPath": "~/Library/Application Support/kimi-desktop",
+      "quotaSource": "research",
+      "apiKeyEnv": "MOONSHOT_API_KEY",
+      "apiKey": "",
+      "baseUrl": "https://api.moonshot.cn",
+      "warnBalance": 20,
+      "criticalBalance": 5,
+      "processPattern": "Kimi"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+# ---- 运行时数据 / 隐私 ----
+# 额度历史是真实个人用量记录，绝不能进公开仓库
+bridge/data/
+config.local.json
+*.log
+
+# ---- 构建产物 ----
+# PlatformIO 的依赖与中间产物（含 100MB+ 的 .a 和 .o）
+firmware/.pio/
+# 打好的 .app 和 zip（107MB，走 GitHub Release 分发）
+package/dist/
+# 图标中间产物：iconset 各尺寸、编译出的渲染器
+package/icon/AppIcon.iconset/
+package/icon/make-icon
+# 图标素材原图带「AI生成」水印，不随仓库分发；重新生成见 package/icon/build-icon.sh
+package/icon/raw/
+
+# ---- 系统垃圾 ----
+.DS_Store
+Thumbs.db
+*.swp
