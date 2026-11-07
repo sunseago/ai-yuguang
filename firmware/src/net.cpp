@@ -243,6 +243,8 @@ bool netFetch(DpModel& m) {
   m.bridgeOnline = true;
   m.bridgeTs = (uint64_t)doc["ts"].as<double>();
   m.localStampMs = millis();
+  // 缺这个字段（旧版桥接）时给 -1：设备会当作"人在用"，不会误熄屏
+  m.hostIdleS = doc["host"]["idle_s"] | -1;
 
   const char* lt = doc["bridge"]["localTime"] | "";
   if (lt[0]) {

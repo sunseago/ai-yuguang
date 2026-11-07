@@ -56,6 +56,7 @@ struct DpModel {
   bool bridgeOnline;
   uint64_t bridgeTs;       // 桥接时间（epoch ms），用于校时
   uint64_t localStampMs;   // 收到这份数据时的本机 millis()
+  int32_t hostIdleS;        // 电脑距离上次键鼠输入的秒数；-1 = 读不到
   int count;
   DpProvider items[5];
 };

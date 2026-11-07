@@ -44,15 +44,29 @@
 // 画面立刻转动，选到正的为止，会自动存进 NVS。改这里只是改出厂值。
 #define IMU_ROT_OFFSET 2
 
-// ---- 熄屏策略 ----
-// 0 = 永不熄屏（默认，适合长期插在电脑上当桌面摆件）。
-// 想让电池供电时省电，改成 300000（5 分钟无操作熄屏）；
-// 插着 USB 时无论这里设多少都不会熄屏。
-#define DP_BLANK_AFTER_MS 0
+// ---- 屏幕电源策略（详见 screenpower.cpp）----
+// 核心：跟"电脑用不用"走，不跟"插没插电"走。
+//
+// 电脑在（USB 主机枚举着）时：
+//   5 分钟没键鼠输入 → 暗到 15%
+//   桥接断了 → 保持亮着显示 NO LINK，15 分钟后熄（给你留时间去修）
+// 电脑不在（Mac 睡眠/关机、只插充电器、纯电池）时：
+//   桥接一断，15 秒就熄 —— 数据已经是死的，亮着纯粹浪费
+// 电池供电时阈值收紧（没有墙插兜底，省电优先）：
+//   1 分钟没输入就暗
+#define SCR_DIM_AFTER_HOST_IDLE_MS 300000UL      // USB：5 分钟无输入变暗
+#define SCR_DIM_AFTER_HOST_IDLE_BAT_MS 60000UL   // 电池：1 分钟无输入变暗
+#define SCR_DIM_PERCENT 15                       // 暗档亮度
+#define SCR_OFF_AFTER_NOLINK_USB_MS 900000UL     // USB：断链 15 分钟熄屏
+#define SCR_OFF_AFTER_NOLINK_BAT_MS 15000UL      // 无 USB 主机：断链 15 秒熄屏
+#define SCR_WAKE_PEEK_MS 10000UL                 // 熄屏后点一下，亮 10 秒
+#define SCR_OFF_FADE_MS 1500                     // 熄屏前先压到 5% 再灭，别瞬间黑
+#define SCR_OFF_FADE_PERCENT 5
+#define SCR_MAX_LEVEL 100                        // 亮度上限（百分比）
 
 // ---- 按键（低电平有效）----
 #define BTN_BOOT 0   // 短按切亮度，长按 5s 重新配网
 #define BTN_USER 5   // 短按切页
 #define BTN_PWR 4    // 备用
 
-#define DP_FW_VERSION "0.1.2"
+#define DP_FW_VERSION "0.1.3"

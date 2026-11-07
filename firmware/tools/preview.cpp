@@ -106,7 +106,7 @@ int main() {
   in.rssi = -58;
   in.bridgeHost = "192.168.100.151";
   in.ip = "192.168.100.142";
-  in.fwVersion = "0.1.2";
+  in.fwVersion = "0.1.3";
   in.brightness = 60;
   in.clockText = "20:19";
   in.power = "USB";

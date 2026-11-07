@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pickConfig, log } from './lib/util.mjs';
 import { createQuotaStore } from './lib/quota.mjs';
+import { hostIdleSeconds } from './lib/host-idle.mjs';
 import { refreshDeepSeekQuota, deepSeekQuota } from './lib/deepseek-balance.mjs';
 import { readWorkBuddy } from './adapters/workbuddy.mjs';
 import { readDsh } from './adapters/dsh.mjs';
@@ -131,11 +132,16 @@ async function buildState() {
   return {
     ts: Date.now(),
     bridge: {
-      ver: '0.1.2',
+      ver: '0.1.3',
       uptime_s: Math.round((Date.now() - startedAt) / 1000),
       host: os.hostname(),
       // 设备没有 NTP 也能显示正确时间：桥接直接把本地时钟格式化好
       localTime: new Date().toTimeString().slice(0, 5),
+    },
+    // 主机侧状态：设备据此决定要不要变暗/熄屏。
+    // idle_s 是距离上次键鼠输入的秒数，-1 表示读不到（设备会当作"在用"）。
+    host: {
+      idle_s: hostIdleSeconds(),
     },
     providers,
   };
@@ -198,7 +204,7 @@ function lanIp() {
 const udp = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 udp.on('message', (msg, rinfo) => {
   if (!msg.toString().startsWith('DESKPULSE?')) return;
-  const reply = Buffer.from(JSON.stringify({ host: lanIp(), port: cfg.port, ver: '0.1.2' }));
+  const reply = Buffer.from(JSON.stringify({ host: lanIp(), port: cfg.port, ver: '0.1.3' }));
   udp.send(reply, rinfo.port, rinfo.address);
 });
 udp.on('error', (e) => log('UDP error:', e.message));

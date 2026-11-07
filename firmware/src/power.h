@@ -15,15 +15,18 @@ void powerInit();
 // 电池电压（V）。没装电池时返回 -1。
 float powerBatteryVoltage();
 
-// 是否 USB 供电
+// 是否 USB 供电（含"只插了充电器"的情况）
 bool powerOnUsb();
+
+// USB 线另一头是不是一台**醒着的电脑**。
+//
+// 和 powerOnUsb() 的区别很关键：插充电器 powerOnUsb() 为真，但这里为假。
+// 判据只有 Serial.isPlugged()（USB SOF 中断维护）——Mac 睡眠时总线挂起，
+// 这个值会掉下来。熄屏策略要的是"电脑在不在"，不是"有没有电"。
+bool powerUsbHostPresent();
 
 // 给屏幕显示用的短标签："USB" / "BAT 87%" / "BAT ?"
 const char* powerLabel();
 
 // 电池百分比（0..100），未知返回 -1
 int8_t powerBatteryPercent();
-
-// 有新输入时调用，用于熄屏策略计时
-void powerNoteActivity();
-uint32_t powerIdleMs();

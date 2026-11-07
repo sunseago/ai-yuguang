@@ -16,7 +16,7 @@ cd "$(dirname "$0")"
 APP_TITLE="AI余光"               # 显示名 = .app 文件名（全名，别简写成「余光」）
 APP_NAME="yuguang"               # 包内可执行文件名（ASCII）
 BUNDLE_ID="cn.deskpulse.app"
-VERSION="0.1.2"
+VERSION="0.1.3"
 ROOT="$(cd .. && pwd)"          # deskpulse/
 DIST="$(pwd)/dist"
 APP="$DIST/$APP_TITLE.app"

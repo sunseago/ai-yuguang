@@ -52,7 +52,7 @@ Kimi(余额 API + 进程)   ┘
 | 端到端：Wi-Fi → UDP 发现 → 拉取 → 上屏 | ✅ 实测通过（见下方验证记录） |
 | 断连降级与自动重连 | ✅ 实测通过（`bridge LOST` → `OFFLINE` → `ONLINE`） |
 | 陀螺仪（QMI8658）自动转屏 + 触摸同步逆变换 | ✅ 已烧录，`imu=ok`，方向映射已验证自洽 |
-| 插电脑不熄屏 / 供电来源识别 | ✅ `pwr=USB 100%`，默认永不熄屏 |
+| 屏幕亮灭跟随电脑使用状态 | ✅ 实测：人走开 5 分钟变暗到 15%，回来立刻恢复 |
 | Mac 菜单栏 App（自带 node，一键安装） | ✅ 实测通过：开机自启 / 崩溃自愈 / 孤儿进程回收 |
 | agent 弹框时卡片红闪提醒 | ✅ WorkBuddy / DeepSeek Harness 已端到端验证；Kimi 不支持 |
 | 阈值蜂鸣、OTA、USB 兜底通道 | ⬜ 未做（原 P1） |
@@ -371,9 +371,37 @@ g++ -O1 -I src -o /tmp/rot_test tools/test_rotation.cpp && /tmp/rot_test
 串口里能看到全过程：`[dp] imu quad=N ax=… ay=… -> base=N off=2`、`[dp] rotate=N (… deg)`、
 `[dp] rot_offset=3 (r=1)`。
 
-**不熄屏**：固件默认**永不熄屏**（`DP_BLANK_AFTER_MS = 0`），插在电脑上一直亮着。
-想让电池供电时省电，把 `board_config.h` 里 `DP_BLANK_AFTER_MS` 改成 `300000`（5 分钟），
-此时仅在没有 USB 供电时才熄屏，USB 供电无论怎么设都不会熄。触摸或按键会立刻点亮。
+**屏幕亮灭**：跟"电脑用不用"走，不跟"插没插电"走。
+
+| 场景 | 屏幕 |
+| --- | --- |
+| 电脑在用 | 正常亮度（BOOT 键在 30/60/100 之间切） |
+| 电脑开着、人走开 5 分钟 | 暗到 15%，扫一眼仍能读 |
+| 桥接断了但电脑在 | 保持亮着显示 `NO LINK`，**15 分钟**后才熄，留时间给你去修 |
+| Mac 睡眠 / 关机 / 只插充电器 | 断链 **15 秒**就熄 —— 数据已经是死的，亮着没意义 |
+| 电池供电 | 阈值收紧：1 分钟无输入变暗、断链 15 秒熄屏 |
+| 熄屏时摸一下 | 亮 10 秒让你瞄一眼，然后自动熄 |
+| 从没连上过（配网阶段） | 一直亮 —— 黑屏会让人以为板子坏了 |
+
+熄屏前会先压到 5% 停 1.5 秒再灭，不会"啪"一下黑掉。电脑重新上线时会主动亮 10 秒打个招呼，
+不用伸手点。
+
+**怎么知道"人在不在"**：桥接每 5 秒读一次 macOS 的 `HIDIdleTime`（距离上次键鼠输入的纳秒数），
+放进 `/v1/state` 的 `host.idle_s`。这是唯一可靠的信号——板子自己的触摸事件不能用来判断，
+因为你本来就不会一直摸它，那样会得出"人永远不在"的结论。
+
+`host.idle_s = -1` 表示读不到（老桥接 / `ioreg` 失败），设备当作"人在用"，宁亮不熄。
+
+**怎么知道"电脑在不在"**：`Serial.isPlugged()`（USB SOF 中断维护）。注意这和"USB 供电"
+不是一回事——插充电器也供电，但不会枚举成 USB 主机。区分开才能做到"只插充电器时也熄屏"。
+
+决策逻辑在 `src/screenlogic.h`（纯函数，电脑上可单测），硬件胶水在 `src/screenpower.cpp`。
+改阈值只动 `board_config.h` 里那组 `SCR_*`。
+
+```bash
+cd firmware
+g++ -std=c++17 -O1 -I src -o /tmp/scr tools/test_screenlogic.cpp && /tmp/scr   # 18 项
+```
 
 供电来源判定三条判据任一成立即视为 USB：USB 外设枚举到主机（`Serial.isPlugged()`）、
 电池电压 > 4.15 V（只可能是在充电）、量不到电池（没装电池）。信息页 `power` 一行会显示
@@ -412,6 +440,7 @@ deskpulse/
 │  ├─ adapters/kimi.mjs           余额 API + 进程探测
 │  ├─ lib/zstdframes.mjs          多帧 zstd 分帧解压
 │  ├─ lib/approval.mjs            从审计日志识别"正在等你确认"（纯文件，可单测）
+│  ├─ lib/host-idle.mjs           读 macOS HIDIdleTime → host.idle_s
 │  ├─ lib/quota.mjs               余额采样历史 / 日耗 / 可用天数
 │  ├─ tests/dsh-incremental.mjs   增量解析测试（含半帧）
 │  ├─ tests/contract.mjs          固件↔桥接字段契约测试
@@ -436,10 +465,13 @@ deskpulse/
    ├─ src/display.cpp             ST7789 + 背光
    ├─ src/rotate.h                 整帧旋转 + 触摸逆变换（纯头文件，可在电脑上测）
    ├─ src/imu.cpp                 QMI8658 加速度计 → 屏幕方向
-   ├─ src/power.cpp               电池 ADC + USB 供电判定
+   ├─ src/power.cpp               电池 ADC + USB 供电 / USB 主机判定
+   ├─ src/screenlogic.h           屏幕亮灭的纯决策逻辑（可单测）
+   ├─ src/screenpower.cpp         硬件胶水：把模式翻译成背光值
    ├─ src/board_config.h          引脚（见文件头注释的来源说明）
    ├─ tools/preview.cpp           桌面渲染预览
-   ├─ tools/test_rotation.cpp     旋转公式主机测试
+   ├─ tools/test_rotation.cpp     转屏公式主机测试
+   ├─ tools/test_screenlogic.cpp  屏幕策略单测（含边界：配网/唤醒/淡出）
    └─ tools/gen_font.py           从 Unifont 生成点阵表
 ```
 
@@ -520,6 +552,9 @@ python3 tools/gen_font.py unifont.hex src/font_data.h
 | 关掉 WorkBuddy 后卡片一直卡在 `THINKING`（红标签、耗时一直涨） | 已修：`workbuddy.mjs` 之前只看 `sessions.status` 不看时间，进程被关掉后 DB 里残留 `working` 会一直报 thinking。现在套 `idleAfterMs`（默认 5 分钟无活动降为 `IDLE`），和 `dsh.mjs` 一致 |
 | 板子显示 `NO LINK` | 桥接没在跑。`curl 127.0.0.1:8787/healthz` 探一下；电脑睡眠也会导致这个 |
 | `NO LINK` 时界面卡死、点击滑动丢、转屏要等很久 | 已修（0.1.2）。根因是 `http.GET()` 同步阻塞、超时 2.5 秒，而它原来跑在 `loop()` 里：主机**可达但不回应**（Mac 睡眠、Wi-Fi 半断）时，每 2 秒冻结界面 2.5 秒，触摸（边沿检测）和 IMU 轮询（200ms×5 次）全被饿死。现在网络搬进 core 0 的独立任务，UI 只读快照。自查只看心跳的 `gap=`：正常几十毫秒 |
+| 屏一直亮着，人不在电脑前也不变暗 | 桥接没送 `host.idle_s`。`curl -s 127.0.0.1:8787/v1/state \| python3 -m json.tool \| grep idle` 看一眼；-1 表示 `ioreg` 读不到，设备会当作「人在用」保守不熄 |
+| 只想让屏一直亮着 | `board_config.h` 把 `SCR_DIM_AFTER_HOST_IDLE_MS` 和 `SCR_OFF_AFTER_NOLINK_*` 都调大即可，或者直接把 `SCR_DIM_PERCENT` 改成 100 |
+| 熄屏后摸屏幕没反应 | 第一下是唤醒，只亮 10 秒不翻页；这 10 秒内再点才导航 |
 | 设备平放时也在乱转 | 说明 in-plane 阈值太低，把 `imu.cpp` 里 `kTiltInPlane` 调大 |
 
 抓串口用 `firmware/tools/cap.py`（关键是 `dtr = True`）：
@@ -534,24 +569,35 @@ cd firmware && python3 tools/cap.py /dev/cu.usbmodem101 40
 ## 验证记录（2026-11-07，真机）
 
 ```
-[dp] AI余光 0.1.2 boot
-[dp] psram=8386295 freeheap=326120
+[dp] AI余光 0.1.3 boot
+[dp] psram=8386295 freeheap=326096
 [dp] canvas=ok ptr=0x3d800908          ← 画布落在 PSRAM
 [dp] touch+buttons ready
-[dp] power=USB 98% batt=detected
+[dp] power=USB 97% batt=detected
 [dp] imu=ok addr=0x6B rot_offset=2
-[dp] wifi connected ip=192.168.100.190 rssi=-37
+[dp] wifi connected ip=192.168.100.190 rssi=-35
 [dp] wifi=1 ip=192.168.100.190 bridge=192.168.100.151
 [dp] first fetch ok, providers=3
-[dp]   #0 WorkBuddy state=IDLE credit=268.62/100.00
-[dp]   #1 DeepSeek  state=IDLE balance=13.53 CNY spend/d=0.00 burn=63.2
+[dp]   #0 WorkBuddy state=IDLE credit=293.43/100.00
+[dp]   #1 DeepSeek  state=IDLE balance=12.86 CNY spend/d=0.67 burn=2.0
 [dp]   #2 Kimi      state=IDLE credit=0.00/50.00
 [dp] bridge ONLINE
-[dp] imu quad=3 ax=-0.83 ay=-0.01 az=-0.58 -> base=3 off=2 (rot now 2)
-[dp] rotate=1 (90 deg) ax=-0.83 ay=-0.01 az=-0.58
-[dp] t=30s wifi=1 link=1 heap=271192 psram_free=8140543 rot=1 imu=ok pwr=USB 98%
-     gap=46ms g=-0.83,-0.01,-0.58 flat=0
-     | workbuddy:IDLE 269/100 | deepseek:IDLE 13.53 | kimi:IDLE 0/50
+[dp] imu quad=3 ax=-0.91 ay=0.05 az=-0.44 -> base=3 off=2 (rot now 2)
+[dp] rotate=1 (90 deg) ax=-0.91 ay=0.05 az=-0.44
+[dp] t=30s wifi=1 link=1 heap=271160 psram_free=8140543 rot=1 imu=ok pwr=USB 97%
+     gap=45ms scr=on idle=189s br=60 g=-0.91,0.05,-0.44 flat=0
+     | workbuddy:IDLE 293/100 | deepseek:IDLE 12.86 | kimi:IDLE 0/50
+```
+
+`scr=` 是屏幕策略现场（`on`/`dim`/`off`）+ `idle=` 电脑闲置秒数 + `br=` 当前背光百分比。
+判断"屏为什么黑了"只看这一小段。同一台机器上实测过的完整过程：
+
+```
+t=30s  scr=on  idle=268s br=60     ← 在用
+t=30s  scr=dim idle=316s br=15     ← 超过 5 分钟，自动变暗
+t=30s  scr=dim idle=376s br=15     ← 一直暗着
+（鼠标动了一下）
+t=30s  scr=on  idle=84s  br=60     ← 立刻回到全亮
 ```
 
 `gap=` 是过去 30 秒内**主循环的最长停顿**，正常在几十毫秒（一帧渲染）。它超过

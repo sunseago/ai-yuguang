@@ -8,6 +8,7 @@
 #include "model.h"
 #include "net.h"
 #include "power.h"
+#include "screenpower.h"
 #include "ui.h"
 
 static Canvas gCanvas;
@@ -21,7 +22,6 @@ static uint32_t gLastRender = 0;
 static uint32_t gLastBeat = 0;
 static bool gDirty = true;
 static bool gLastOnline = false;
-static bool gScreenOn = true;
 static uint8_t gLastRot = 0;
 static bool gImuOk = false;
 
@@ -30,13 +30,6 @@ static bool gImuOk = false;
 static uint32_t gLastLoopAt = 0;
 static uint32_t gMaxGap = 0;
 
-// 熄屏/亮屏统一走这里，保证亮度只在这一个地方被清零
-static void setScreenOn(bool on) {
-  if (gScreenOn == on) return;
-  gScreenOn = on;
-  displayBrightness(on ? kBrightSteps[gBrightIdx] : 0);
-  if (on) gDirty = true;
-}
 
 // 定义在下面（render 之后），这里先声明——render 和主循环都要用
 uint64_t bridgeNowMs();
@@ -111,6 +104,10 @@ void setup() {
   Serial.printf("[dp] power=%s batt=%s\n", powerLabel(),
                 powerBatteryVoltage() < 0 ? "none" : "detected");
 
+  // 屏幕电源策略要在首帧渲染前就位，否则开机那一下亮度是未定义的
+  screenPowerInit();
+  displayBrightness(kBrightSteps[gBrightIdx]);
+
   gImuOk = imuInit();
   if (gImuOk) {
     Serial.printf("[dp] imu=ok addr=0x%02X rot_offset=%u\n", imuAddress(), (unsigned)imuOffset());
@@ -153,6 +150,10 @@ void setup() {
 void loop() {
   inputPoll();
 
+  // 熄屏状态下这一下的触摸只用于唤醒，不能顺带翻页/点卡片 ——
+  // 否则会出现"想叫醒屏幕，结果把页面滑走了"。
+  const bool screenWasOff = screenPowerIsOff();
+
   uint32_t now = millis();
 
   // 网络在后台任务里跑，这里只是取一份快照 —— 主循环再也不会被 HTTP 阻塞。
@@ -179,6 +180,11 @@ void loop() {
                      (unsigned)displayRotation(), gImuOk ? "ok" : "--", powerLabel());
     n += snprintf(beat + n, sizeof(beat) - n, " gap=%lums", (unsigned long)gMaxGap);
     gMaxGap = 0;
+    // 屏幕策略的现场：on/dim/off + 电脑空闲秒数 + 亮多少。
+    // 判断"为什么屏黑了"只看这一小段就够。
+    n += snprintf(beat + n, sizeof(beat) - n, " scr=%s idle=%lds br=%u",
+                  screenPowerIsOff() ? "off" : (screenPowerIsDim() ? "dim" : "on"),
+                  (long)gModel.hostIdleS, (unsigned)screenPowerLevel());
     if (gImuOk) {
       float ax, ay, az, ip;
       imuLastSample(ax, ay, az, ip);
@@ -206,6 +212,9 @@ void loop() {
   bool active = false;
   int tx = 0, ty = 0;
   DpGesture g = inputTakeGesture(tx, ty);
+  if (screenWasOff && g != DP_G_NONE) {
+    g = DP_G_NONE;   // 只当作"叫醒"，不导航
+  }
   if (g == DP_G_TAP) {
     active = true;
     if (gPage == 0) {
@@ -242,6 +251,12 @@ void loop() {
   bool userShort = inputTakeUserShort();
   if (bootShort || bootLong || userShort) active = true;
 
+  // 熄屏时短按也只用来唤醒。长按（重新配网）不拦——那是"不管屏幕怎样都要生效"的操作。
+  if (screenWasOff) {
+    bootShort = false;
+    userShort = false;
+  }
+
   // ---- 自动转屏：只有明显立起来才切，平放时保持不动 ----
   if (gImuOk) {
     uint8_t r = imuPoll();
@@ -255,19 +270,12 @@ void loop() {
     }
   }
 
-  // ---- 熄屏策略 ----
-  // 插在电脑上（USB 供电）永远不熄屏；只有电池供电且设置了超时才会熄。
-  if (active) powerNoteActivity();
-#if DP_BLANK_AFTER_MS > 0
-  if (powerOnUsb() || powerIdleMs() < DP_BLANK_AFTER_MS) {
-    setScreenOn(true);
-  } else {
-    setScreenOn(false);
-  }
-#else
-  (void)active;
-  setScreenOn(true);
-#endif
+  // ---- 屏幕电源策略 ----
+  // 跟"电脑用不用"走，不跟"插没插电"走：人在电脑前就亮，人走开变暗，电脑停了熄屏。
+  // 判据和阈值都在 screenpower.cpp / board_config.h 里，这里只喂输入。
+  if (active || screenWasOff) screenPowerNoteInput();
+  screenPowerUpdate(gModel, gModel.bridgeOnline, powerUsbHostPresent(),
+                    kBrightSteps[gBrightIdx]);
 
   if (bootShort) {
     if (gPage == 2) {
@@ -278,8 +286,9 @@ void loop() {
       gLastRot = imuRotation();
       gDirty = true;
     } else {
+      // 只改"基础亮度"，实际下发由 screenPowerUpdate 统一做，
+      // 免得这里把背光写回 100% 又把暗档/熄屏覆盖掉
       gBrightIdx = (gBrightIdx + 1) % 3;
-      if (gScreenOn) displayBrightness(kBrightSteps[gBrightIdx]);
       gDirty = true;
     }
   }
