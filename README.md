@@ -54,7 +54,7 @@ Kimi(余额 API + 进程)   ┘
 | 陀螺仪（QMI8658）自动转屏 + 触摸同步逆变换 | ✅ 已烧录，`imu=ok`，方向映射已验证自洽 |
 | 插电脑不熄屏 / 供电来源识别 | ✅ `pwr=USB 100%`，默认永不熄屏 |
 | Mac 菜单栏 App（自带 node，一键安装） | ✅ 实测通过：开机自启 / 崩溃自愈 / 孤儿进程回收 |
-| agent 弹框时卡片红闪提醒（WorkBuddy） | ✅ 已端到端验证（审计日志 → 桥接 → 屏显 `WAIT`） |
+| agent 弹框时卡片红闪提醒 | ✅ WorkBuddy / DeepSeek Harness 已端到端验证；Kimi 不支持 |
 | 阈值蜂鸣、OTA、USB 兜底通道 | ⬜ 未做（原 P1） |
 
 ---
@@ -286,27 +286,35 @@ python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bi
 - 暗的那半帧是"淡红底 + 红字"，**不是消失**——否则会看成"闪没了"，还是不知道它在等人
 - 有卡片在呼吸时，重绘从 1 s 提到 250 ms；平时维持 1 s（软件旋转一帧 3–5 ms，代价可忽略）
 
-**怎么知道你在等确认**：WorkBuddy 会把安全决策写进 `~/.workbuddy/audit-log/YYYY-MM-DD.jsonl`，
-一次弹框留两条记录，靠 `toolCallId` 配对：
+**怎么知道你在等确认**：两家都把这个状态写进了本地文件，但位置和字段完全不同。
+
+**WorkBuddy** — `~/.workbuddy/audit-log/YYYY-MM-DD.jsonl`，靠 `toolCallId` 配对：
 
 ```
 file-safety.needs-approval        ← 弹框出现
 file-safety.approved / .rejected  ← 你点了允许 / 拒绝
 ```
 
-「有 needs-approval、但没有同 id 的 approved/rejected」= 此刻正在等你。实测样例（2026-11-07
-20:11:03 → 20:11:15）中间那 12 秒就是人读弹框再点允许的时间。
+实测样例（2026-11-07 20:11:03 → 20:11:15），中间那 12 秒就是人读弹框再点允许的时间。
+覆盖 `file-safety.*`、`file-safety.bulk-delete.*`。`network.*` 暂不纳入——历史日志里
+`ask-matched` 35 次 / `approved` 29 次，不是一一对应，配对关系还没实测清楚，收进来会误报。
 
-解析在 `bridge/lib/approval.mjs`（纯文件操作，可脱离数据库单测），适配器只负责把它翻译成
-`awaiting`。**只读审计日志，不写任何东西。**
+**DeepSeek Harness** — 直接写在会话日志里，靠 `data.id` 配对：
 
-覆盖到的事件族：`file-safety.*`、`file-safety.bulk-delete.*`。
-`network.*` 暂不纳入（历史日志里 `ask-matched` 35 次 / `approved` 29 次，不是一一对应，
-配对关系还没实测清楚，收进来会误报）。
+```
+approval/asked    { id, toolName, callId, reason }   ← 弹框出现
+approval/decided  { id, outcome }                    ← allowed-once / denied…
+```
 
-**只对 WorkBuddy 生效。** DeepSeek Harness 的本地会话日志里还没观察到审批事件，
-Kimi 是 Electron 应用、权限框只活在渲染层不留痕。这两家要做只能走 macOS 辅助功能 API
-读窗口，需要授权且容易随版本失效，暂时不做。
+实测样例（2026-11-07 22:54，`bash` 要求把沙箱升到 danger-full-access 去写工作区外的目录，
+2.5 秒后 `allowed-once`）。等待期间卡片会显示被问的工具名。
+
+两家的解析都是纯文件操作、不写任何东西：WorkBuddy 的在 `bridge/lib/approval.mjs`，
+dsh 的在 `adapters/dsh.mjs` 的事件状态机里。各自有单测（`tests/approval.mjs`、
+`tests/dsh-approval.mjs`），都不需要那两个 app 装在本机。
+
+**Kimi 还不支持。** 它是 Electron 应用，权限框只活在渲染层、磁盘上不留痕，
+只能走 macOS 辅助功能 API 读窗口——要用户授权且容易随版本更新打掉，暂时不做。
 
 配色和呼吸节奏集中在 `ui.cpp` 的 `badgeStyle()` / `awaitingLit()` / `kAwaitBlinkMs` 几处，
 改颜色和闪多久只动那里。
@@ -408,6 +416,7 @@ deskpulse/
 │  ├─ tests/dsh-incremental.mjs   增量解析测试（含半帧）
 │  ├─ tests/contract.mjs          固件↔桥接字段契约测试
 │  ├─ tests/approval.mjs          等确认检测的单测（不需要 WorkBuddy）
+│  ├─ tests/dsh-approval.mjs      dsh 审批事件的单测（合成日志）
 │  └─ install-launchd.sh          常驻服务
 ├─ package/
 │  ├─ main.swift                  菜单栏程序（管引擎子进程）
@@ -458,7 +467,8 @@ cd /tmp && /tmp/preview && python3 <项目>/firmware/tools/ppm2png.py
 
 ```bash
 cd bridge
-node tests/approval.mjs     # 配对 / 增量 / 半行 / 过期，10 项
+node tests/approval.mjs      # WorkBuddy：配对 / 增量 / 半行 / 过期，10 项
+node tests/dsh-approval.mjs  # dsh：asked/decided 配对与过期，7 项
 ```
 
 这是刻意设计的：`canvas.cpp` / `ui.cpp` 不依赖 Arduino，才能在电脑上编译。
@@ -582,9 +592,9 @@ Kimi 的 `0/50` 来自桌面版每日额度，两者都没有配置任何 Key。
 ## 已知限制
 
 - 只支持最多 3 张卡片同屏（第 4、5 个供应商需翻页，未实现）。
-- 弹框红闪只对 **WorkBuddy** 生效。DeepSeek Harness 的日志里还没观察到审批事件；
-  Kimi 是 Electron 应用，权限框只活在渲染层、磁盘上不留痕。这两家要做只能走 macOS
-  辅助功能 API 读窗口，要用户授权且随时可能被版本更新打掉，暂时没做。
+- 弹框红闪支持 **WorkBuddy** 和 **DeepSeek Harness**。Kimi 是 Electron 应用，权限框只活在
+  渲染层、磁盘不留痕，要做只能走 macOS 辅助功能 API 读窗口——要授权且随时可能被版本
+  更新打掉，暂时没做。
 - 长时间挂机尚未做 48 小时老化；目前 30 秒心跳观察堆内存无增长趋势。
 - Kimi 的任务进度只能到「会话是否在进行」，做不到「第几步」；
   上下文占用（`context.used/size`）已解析进模型但还没画到屏上。

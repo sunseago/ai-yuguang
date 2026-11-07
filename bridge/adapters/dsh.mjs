@@ -65,6 +65,8 @@ function emptyState(file) {
     state: 'idle',
     stateSince: Date.now(),
     lastEventAt: 0,
+    // 正在等用户确认的那条审批（approval/asked 的 data.id），用于配对 decided
+    approvalId: null,
   };
 }
 
@@ -125,6 +127,25 @@ function apply(st, ev) {
       break;
     case 'job/settled':
       st.jobs.delete(d.jobId || `anon-${time}`);
+      break;
+    // ---- 权限弹框 ----
+    // dsh 会把审批过程写进会话日志，两条事件靠 data.id 配对：
+    //   approval/asked   { id, toolName, callId, reason }   ← 弹框出现
+    //   approval/decided { id, outcome }                    ← 你点了（allowed-once / denied…）
+    // 「有 asked 但没有同 id 的 decided」= 正在等你。
+    case 'approval/asked':
+      st.state = 'awaiting';
+      st.stateSince = time;
+      st.approvalId = d.id || null;
+      st.tool = d.toolName || null;
+      break;
+    case 'approval/decided':
+      // 只认当前那一条的决议：旧决议不该把后来的新弹框解掉
+      if (st.approvalId && d.id && d.id !== st.approvalId) break;
+      st.approvalId = null;
+      // 决议之后通常会接着执行那个工具，先回到 thinking，等 tool/call 再覆盖
+      st.state = 'thinking';
+      st.stateSince = time;
       break;
     case 'compaction/prune':
       // 上下文压缩：说明还在同一步里推进，不改状态
@@ -223,6 +244,11 @@ function project(st, opts, provider) {
   let state = st.state;
   if ((state === 'thinking' || state === 'tool') && age > (opts?.idleAfterMs ?? 300000)) state = 'idle';
   if (state === 'done' && Date.now() - st.stateSince > (opts?.doneAfterMs ?? 180000)) state = 'idle';
+  // 等你确认的状态不会自己消失，但也不能无限闪下去：弹框可能已被你关掉窗口。
+  // 和 workbuddy 那边用同一个配置项，行为保持一致。
+  if (state === 'awaiting' && Date.now() - st.stateSince > (opts?.awaitExpireMs ?? 300000)) {
+    state = 'idle';
+  }
 
   provider.state = state;
   provider.state_since = st.stateSince;
