@@ -1,5 +1,5 @@
 #!/bin/zsh
-# 把 DeskPulse 桥接装成 macOS 常驻服务（LaunchAgent）。
+# 把 AI余光 桥接装成 macOS 常驻服务（LaunchAgent）。
 # 用法： ./install-launchd.sh            安装并立即启动
 #        ./install-launchd.sh uninstall  卸载
 set -e

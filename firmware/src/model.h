@@ -1,4 +1,4 @@
-// DeskPulse 的数据模型：纯 POD，不依赖 Arduino，方便在电脑上跑 UI 预览。
+// AI余光 的数据模型：纯 POD，不依赖 Arduino，方便在电脑上跑 UI 预览。
 #pragma once
 #include <stdint.h>
 #include <string.h>

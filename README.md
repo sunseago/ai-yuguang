@@ -197,22 +197,55 @@ cp config.json config.local.json && chmod 600 config.local.json
 
 ### 3. 烧录固件
 
+**省事路线：直接烧 Release 里的预编译镜像**（不用装 PlatformIO，只要 esptool）：
+
+```bash
+pip install esptool
+esptool.py --chip esp32s3 -p /dev/cu.usbmodem101 -b 460800 \
+  write_flash 0x0 AIYuguang-0.1.0-esp32s3-16MB.bin
+```
+
+那个 `.bin` 已经把 bootloader + 分区表 + 应用合并好了，所以偏移是 `0x0`，一条命令搞定。
+烧完设备自动进配网模式（见下一节），**已保存的 Wi-Fi 配置会保留**；
+想连配置一起清掉就先 `esptool.py ... erase_flash`。
+
+Waveshare 出厂固件是小智 AI，第一次覆盖要先按住 BOOT 再插 USB 进下载模式。
+
+**从源码编译：**
+
 ```bash
 cd firmware
 ./flash.sh                    # 自动找串口烧录
 ./flash.sh build              # 只编译
 ```
 
-> 第一次烧录：按住 BOOT 再插 USB 进下载模式（板子出厂固件是小智 AI，需要覆盖）。
-
 `flash.sh` 里替你处理了两个本机环境的坑：`PYTHONPATH` 里的安全删除钩子会打断 PlatformIO
-的清理流程，以及 TMPDIR 需要可写。手动跑 `pio run` 时会遇到同样的报错，照抄脚本里的两行即可。
+的清理流程，以及 TMPDIR 需要可写。
+
+> ⚠️ **改完源码务必用 `./flash.sh build`，别直接 `pio run`。** 如果 `PYTHONPATH` 里带着那个
+> 安全删除钩子，清理步骤会被静默拦掉，SCons 可能**不重编却照样报 SUCCESS**——你以为编了，
+> 实际 `firmware.bin` 的时间戳还停在几小时前。
+> 写这份文档时就踩了：改完界面文案跑 `pio run` 报成功，烧进去发现屏幕上的字没变。
+> 判断是否真重编了，看 `ls -la .pio/build/*/firmware.bin` 的时间戳，或者直接
+> 在 `.bin` 里搜文案的 UTF-8 字节。
+
+想自己重新生成合并镜像（比如改了代码之后发版）：
+
+```bash
+pio run
+B=.pio/build/waveshare_lcd_154
+python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bin \
+  -o dist/固件名.bin --flash_mode qio --flash_freq 80m --flash_size 16MB \
+  0x0 $B/bootloader.bin 0x8000 $B/partitions.bin \
+  0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
+  0x10000 $B/firmware.bin
+```
 
 ### 4. 设备配网
 
 首次上电（NVS 里没有 Wi-Fi）：
 
-1. 屏幕显示 `SETUP MODE`，手机连 `DeskPulse-xxxx`，密码 `deskpulse`
+1. 屏幕显示 `SETUP MODE`，手机连 `Yuguang-xxxx`，密码 `yuguang`
 2. 浏览器打开 `192.168.4.1`，填 Wi-Fi 名称/密码，电脑地址**可留空**（会 UDP 自动发现）
 3. 保存后设备自动重启并开始拉数据
 
@@ -442,30 +475,34 @@ cd firmware && python3 tools/cap.py /dev/cu.usbmodem101 40
 ## 验证记录（2026-11-07，真机）
 
 ```
-[dp] DeskPulse 0.1.0 boot
-[dp] psram=8386295 freeheap=328224
+[dp] AI余光 0.1.0 boot
+[dp] psram=8386295 freeheap=327400
 [dp] canvas=ok ptr=0x3d800908          ← 画布落在 PSRAM
 [dp] touch+buttons ready
+[dp] power=USB 97% batt=detected
+[dp] imu=ok addr=0x6B rot_offset=2
 [dp] wifi connected ip=192.168.100.190 rssi=-26
-[dp] udp discovery ok host=192.168.100.151   ← 不用手填 IP
+[dp] wifi=1 ip=192.168.100.190 bridge=192.168.100.151
 [dp] first fetch ok, providers=3
-[dp]   #0 WorkBuddy state=THINKING credit=76.41/100.00
-[dp]   #1 DeepSeek  state=IDLE     balance=3.55 CNY spend/d=0.00
-[dp]   #2 Kimi      state=IDLE     credit=0.00/50.00
+[dp]   #0 WorkBuddy state=IDLE credit=207.57/100.00
+[dp]   #1 DeepSeek  state=IDLE balance=13.55 CNY spend/d=0.00 burn=-1.0
+[dp]   #2 Kimi      state=IDLE credit=0.00/50.00
 [dp] bridge ONLINE
-[dp] t=30s wifi=1 link=1 heap=283948 psram_free=8140543 rot=0 imu=ok pwr=USB 100%
-     g=0.07,-0.85,-0.55 flat=0
-     | workbuddy:THINKING 95/100 | deepseek:IDLE 3.55 | kimi:IDLE 0/50
+[dp] imu quad=3 ax=-0.81 ay=-0.02 az=-0.61 -> base=3 off=2 (rot now 2)
+[dp] rotate=1 (90 deg) ax=-0.81 ay=-0.02 az=-0.61
+[dp] t=30s wifi=1 link=1 heap=283544 psram_free=8140543 rot=1 imu=ok pwr=USB 97%
+     g=-0.81,-0.02,-0.61 flat=0
+     | workbuddy:IDLE 208/100 | deepseek:IDLE 13.55 | kimi:IDLE 0/50
 ```
 
 新增的 `rot=` / `imu=` / `g=` / `pwr=` 四个字段来自转屏与供电模块：
 `g` 是加速度（单位 g），`rot` 是当前画面旋转档位，`flat=1` 表示平放（此时不改方向）。
-静止时连续两个心跳的 `g` 完全一致（`0.07,-0.85,-0.55`），说明读数稳定、不是在抖。
+静止时连续两个心跳的 `g` 完全一致（`-0.81,-0.02,-0.61`），说明读数稳定、不是在抖。
 
 已确认：ST7789 显示正常（无需改 `ips` / 偏移）、PSRAM 8 MB 可用、UDP 发现有效、
-三卡数据上屏、断连 10 秒降级并在桥接恢复后自动重连。堆内存 30 秒心跳稳定在 284 KB。
+三卡数据上屏、断连 10 秒降级并在桥接恢复后自动重连。堆内存 30 秒心跳稳定在 284 KB，`link=1` 说明一直在正常取数。
 
-**零 API Key 读数已实测**：DeepSeek 的 `¥3.55` 来自桌面版登录态，
+**零 API Key 读数已实测**：DeepSeek 的 `¥13.55` 来自桌面版登录态，
 Kimi 的 `0/50` 来自桌面版每日额度，两者都没有配置任何 Key。
 
 **四向转屏已实测**（把设备依次摆到四个姿态，串口实录，`off=2` 为出厂偏移）：

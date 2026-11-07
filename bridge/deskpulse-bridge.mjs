@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// DeskPulse 桥接：把三家的状态与额度聚合成一份 JSON，给 ESP32 拉取。
+// AI余光 桥接：把三家的状态与额度聚合成一份 JSON，给 ESP32 拉取。
 // 设计约束（来自 PRD）：零第三方依赖、只读本地数据、密钥不出电脑。
 import http from 'node:http';
 import dgram from 'node:dgram';
@@ -238,7 +238,7 @@ if (once) {
 udp.bind(8788, () => log('UDP 发现已监听 :8788'));
 
 server.listen(cfg.port, cfg.bind || '0.0.0.0', () => {
-  log(`DeskPulse bridge 已启动  http://${lanIp()}:${cfg.port}/v1/state`);
+  log(`AI余光 bridge 已启动  http://${lanIp()}:${cfg.port}/v1/state`);
   log(`采样: 状态 ${cfg.intervalMs}ms / 额度 ${cfg.quotaIntervalMs}ms`);
 });
 

@@ -68,17 +68,17 @@ bool saveConfig(const String& ssid, const String& pass, const String& host, uint
   return true;
 }
 
-// ---------- 配网门户：手机连上 DeskPulse-xxxx 后打开 192.168.4.1 ----------
+// ---------- 配网门户：手机连上 Yuguang-xxxx 后打开 192.168.4.1 ----------
 const char kPortalHtml[] PROGMEM = R"HTML(<!doctype html><html lang="zh"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DeskPulse 配网</title>
+<title>AI余光 配网</title>
 <style>body{font-family:-apple-system,sans-serif;margin:0;padding:24px;background:#f6f7f9;color:#16181d}
 h1{font-size:20px;margin:0 0 4px}p{color:#6b7280;font-size:13px;margin:0 0 20px}
 label{display:block;font-size:13px;margin:14px 0 6px;color:#6b7280}
 input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #e3e5e9;border-radius:10px;font-size:15px}
 button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:10px;background:#16181d;color:#fff;font-size:16px}
 </style>
-<h1>DeskPulse 配网</h1><p>填好 Wi-Fi 与电脑地址后保存，设备会自动重启。</p>
+<h1>AI余光 配网</h1><p>填好 Wi-Fi 与电脑地址后保存，设备会自动重启。</p>
 <form method="post" action="/save">
 <label>Wi-Fi 名称</label><input name="ssid" required>
 <label>Wi-Fi 密码</label><input name="pass" type="password">
@@ -87,8 +87,8 @@ button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:10px;backg
 
 void startConfigPortal() {
   WiFi.mode(WIFI_AP);
-  String apName = "DeskPulse-" + String((uint32_t)(ESP.getEfuseMac() & 0xFFFF), HEX);
-  WiFi.softAP(apName.c_str(), "deskpulse");
+  String apName = "Yuguang-" + String((uint32_t)(ESP.getEfuseMac() & 0xFFFF), HEX);
+  WiFi.softAP(apName.c_str(), "yuguang");
   Serial.printf("[dp] setup AP: %s  -> http://192.168.4.1\n", apName.c_str());
   s_dns = new DNSServer();
   s_dns->start(53, "*", WiFi.softAPIP());

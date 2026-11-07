@@ -276,7 +276,7 @@ void detail(Canvas& c, const UiInput& in) {
 
 void infoPage(Canvas& c, const UiInput& in) {
   statusBar(c, in);
-  c.text(10, 26, "DeskPulse", dpcolor::TEXT, 1);
+  c.text(10, 26, "AI余光", dpcolor::TEXT, 1);
   c.textAligned(120, 26, 110, in.fwVersion, dpcolor::FAINT, 1, DP_RIGHT);
 
   struct Row { const char* k; const char* v; };

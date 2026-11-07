@@ -67,7 +67,7 @@ static void render() {
 
 static void splash() {
   gCanvas.clear(dpcolor::BG);
-  gCanvas.text(16, 96, "DeskPulse", dpcolor::TEXT, 2);
+  gCanvas.text(16, 96, "AI余光", dpcolor::TEXT, 2);
   gCanvas.text(16, 132, "connecting...", dpcolor::MUTED, 1);
   gCanvas.text(16, 176, DP_FW_VERSION, dpcolor::FAINT, 1);
   displayPush(gCanvas.buffer());
@@ -87,7 +87,7 @@ void setup() {
 
   Serial.begin(115200);
   delay(150);
-  Serial.printf("\n[dp] DeskPulse %s boot\n", DP_FW_VERSION);
+  Serial.printf("\n[dp] AI余光 %s boot\n", DP_FW_VERSION);
   Serial.printf("[dp] psram=%u freeheap=%u\n", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreeHeap());
 
   displayInit();
