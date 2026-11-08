@@ -3,7 +3,7 @@
 //   cd firmware
 //   g++ -std=c++17 -O1 -I src -o /tmp/scr tools/test_screenlogic.cpp && /tmp/scr
 //
-// 这块逻辑分支多（配网 / 唤醒 / 淡出 / USB 与电池两套阈值），
+// 这块逻辑分支多（配网 / 唤醒 / 淡出 / 墙插与电池两套阈值 / 熄屏的两个来源），
 // 靠"在板子上看现象"覆盖不全，所以先在这里把边界钉死。
 #include <cstdio>
 #include <cstring>
@@ -22,30 +22,21 @@ static const char* name(ScrMode m) {
   return "?";
 }
 
-static const char* name2(ScrMode m) {
-  switch (m) {
-    case SCR_ON: return "ON";
-    case SCR_DIM: return "DIM";
-    case SCR_FADE: return "FADE";
-    case SCR_OFF: return "OFF";
-  }
-  return "?";
-}
-
 static void check(const char* label, ScrMode got, ScrMode want) {
   const bool ok = got == want;
   if (!ok) fails++;
-  printf("%s  %-46s got=%-4s want=%s\n", ok ? "PASS" : "FAIL", label, name(got), name2(want));
+  printf("%s  %-46s got=%-4s want=%s\n", ok ? "PASS" : "FAIL", label, name(got), name(want));
 }
 
-// 默认阈值：USB 5 分钟变暗 / 15 分钟熄；电池 1 分钟变暗 / 15 秒熄
+// 默认阈值：墙插 5 分钟变暗 / 30 分钟熄；电池 1 分钟变暗 / 10 分钟熄；断链 60 秒熄
 static const ScrCfg kCfg = {
-    300000,  // dimAfterIdleUsbMs
-    60000,   // dimAfterIdleBatMs
-    900000,  // offAfterNolinkUsbMs
-    15000,   // offAfterNolinkBatMs
-    10000,   // peekMs
-    1500,    // fadeMs
+    300000,   // dimAfterIdleWallMs
+    60000,    // dimAfterIdleBattMs
+    1800000,  // offAfterIdleWallMs
+    600000,   // offAfterIdleBattMs
+    60000,    // offAfterNolinkMs
+    10000,    // peekMs
+    1500,     // fadeMs
 };
 
 // 一个"正常在用"的基线，各用例只改关心的字段
@@ -53,40 +44,36 @@ static ScrIn base() {
   ScrIn in;
   memset(&in, 0, sizeof(in));
   in.linkOk = true;
-  in.usbHost = true;
+  in.onBattery = false;
   in.hostIdleS = 5;
   in.linkAgeMs = 0;
   in.sinceInputMs = 999999;  // 很久没摸过板子
-  in.everLinked = true;
   in.modeAgeMs = 999999;
   return in;
 }
 
 int main() {
-  // ---- 1. 配网 / 从没连上过 ----
+  // ---- 1. 开机但连不上桥接（电脑关机/只插充电器）----
+  // 配网门户在 netBegin() 里阻塞运行，根本不走这里，所以这里不需要"一直亮"的保护。
+  // 曾经有这条保护，结果板子插充电器重上电后永远连不上桥接 → 永远亮着 NO LINK。
   {
     ScrIn in = base();
-    in.everLinked = false;
     in.linkOk = false;
-    in.usbHost = false;
-    in.linkAgeMs = 3600000;
-    check("从没连上过 → 一直亮（配网门户）", scrDecide(SCR_OFF, in, kCfg), SCR_ON);
+    in.linkAgeMs = 3600000;  // 早就超了断链阈值
+    check("开机连不上桥接 → 也要按断链熄屏", scrDecide(SCR_ON, in, kCfg), SCR_FADE);
   }
 
   // ---- 2. 正常在用的几种 ----
-  {
-    ScrIn in = base();
-    check("电脑在用（刚有输入） → 亮", scrDecide(SCR_ON, in, kCfg), SCR_ON);
-  }
+  check("电脑在用（刚有输入） → 亮", scrDecide(SCR_ON, base(), kCfg), SCR_ON);
   {
     ScrIn in = base();
     in.hostIdleS = 301;  // 刚过 5 分钟
-    check("USB：闲置 301 秒 → 变暗", scrDecide(SCR_ON, in, kCfg), SCR_DIM);
+    check("墙插：闲置 301 秒 → 变暗", scrDecide(SCR_ON, in, kCfg), SCR_DIM);
   }
   {
     ScrIn in = base();
-    in.hostIdleS = 299;  // 差一点
-    check("USB：闲置 299 秒 → 仍亮", scrDecide(SCR_DIM, in, kCfg), SCR_ON);
+    in.hostIdleS = 299;
+    check("墙插：闲置 299 秒 → 仍亮", scrDecide(SCR_DIM, in, kCfg), SCR_ON);
   }
   {
     ScrIn in = base();
@@ -97,78 +84,83 @@ int main() {
   // ---- 3. 电池模式阈值更紧 ----
   {
     ScrIn in = base();
-    in.usbHost = false;  // 没接电脑 = 电池
+    in.onBattery = true;
     in.hostIdleS = 61;
     check("电池：闲置 61 秒 → 变暗（阈值 1 分钟）", scrDecide(SCR_ON, in, kCfg), SCR_DIM);
   }
   {
     ScrIn in = base();
-    in.usbHost = false;
+    in.onBattery = true;
     in.hostIdleS = 59;
     check("电池：闲置 59 秒 → 仍亮", scrDecide(SCR_DIM, in, kCfg), SCR_ON);
   }
 
-  // ---- 4. 断链：USB 下给 15 分钟，无主机 15 秒 ----
+  // ---- 4. 熄屏的两个来源：断链 & 闲置过久 ----
   {
     ScrIn in = base();
     in.linkOk = false;
-    in.linkAgeMs = 60000;  // 1 分钟
-    check("USB：断链 1 分钟 → 还亮着显示 NO LINK", scrDecide(SCR_ON, in, kCfg), SCR_ON);
+    in.linkAgeMs = 59000;
+    check("断链 59 秒 → 还亮着（60 秒阈值内）", scrDecide(SCR_ON, in, kCfg), SCR_ON);
   }
   {
     ScrIn in = base();
     in.linkOk = false;
-    in.linkAgeMs = 900001;
-    check("USB：断链超 15 分钟 → 进入淡出", scrDecide(SCR_ON, in, kCfg), SCR_FADE);
+    in.linkAgeMs = 61000;
+    check("断链 61 秒 → 进入淡出", scrDecide(SCR_ON, in, kCfg), SCR_FADE);
+  }
+  {
+    ScrIn in = base();
+    in.linkOk = true;
+    in.hostIdleS = 1799;  // 29.98 分钟
+    check("墙插：闲置 1799 秒 → 仍是暗档（未到 30 分钟）", scrDecide(SCR_DIM, in, kCfg), SCR_DIM);
+  }
+  {
+    ScrIn in = base();
+    in.linkOk = true;
+    in.hostIdleS = 1801;  // 30 分钟过一点，电脑还开着（显示器休眠的场景）
+    check("墙插：闲置 1801 秒 → 进入淡出（电脑还开着也要熄）", scrDecide(SCR_ON, in, kCfg), SCR_FADE);
+  }
+  {
+    ScrIn in = base();
+    in.onBattery = true;
+    in.linkOk = true;
+    in.hostIdleS = 601;  // 10 分钟过一点
+    check("电池：闲置 601 秒 → 进入淡出（阈值 10 分钟）", scrDecide(SCR_DIM, in, kCfg), SCR_FADE);
   }
   {
     ScrIn in = base();
     in.linkOk = false;
-    in.linkAgeMs = 900001;
+    in.linkAgeMs = 61000;
     in.modeAgeMs = 1499;
     check("淡出未满 1.5 秒 → 仍是淡出", scrDecide(SCR_FADE, in, kCfg), SCR_FADE);
   }
   {
     ScrIn in = base();
     in.linkOk = false;
-    in.linkAgeMs = 900001;
+    in.linkAgeMs = 61000;
     in.modeAgeMs = 1500;
     check("淡出满 1.5 秒 → 熄屏", scrDecide(SCR_FADE, in, kCfg), SCR_OFF);
-  }
-  {
-    ScrIn in = base();
-    in.usbHost = false;   // 关键：没有 USB 主机才走 15 秒那套阈值
-    in.linkOk = false;
-    in.linkAgeMs = 16000;
-    check("无 USB 主机：断链 16 秒 → 淡出（只给 15 秒）", scrDecide(SCR_ON, in, kCfg), SCR_FADE);
-  }
-  {
-    ScrIn in = base();
-    in.usbHost = false;
-    in.linkOk = false;
-    in.linkAgeMs = 14000;
-    check("无 USB 主机：断链 14 秒 → 还亮着", scrDecide(SCR_ON, in, kCfg), SCR_ON);
   }
 
   // ---- 5. 唤醒 ----
   {
     ScrIn in = base();
     in.linkOk = false;
-    in.linkAgeMs = 3600000;  // 早就该熄了
-    in.sinceInputMs = 100;   // 但刚被摸了一下
+    in.linkAgeMs = 3600000;
+    in.sinceInputMs = 100;
     check("熄屏后摸一下 → 亮（peek）", scrDecide(SCR_OFF, in, kCfg), SCR_ON);
   }
   {
     ScrIn in = base();
     in.linkOk = false;
     in.linkAgeMs = 3600000;
-    in.sinceInputMs = 10001;  // peek 到期
+    in.sinceInputMs = 10001;
     check("peek 10 秒到期 → 回到淡出/熄屏", scrDecide(SCR_ON, in, kCfg), SCR_FADE);
   }
   {
     ScrIn in = base();
     in.sinceInputMs = 5000;
-    in.hostIdleS = 3600;  // 电脑闲置很久，但人正在摸板子
+    in.hostIdleS = 3600;
     check("有人正在摸板子 → 亮，不改暗", scrDecide(SCR_DIM, in, kCfg), SCR_ON);
   }
 
@@ -180,6 +172,13 @@ int main() {
     in.sinceInputMs = 200;  // 由 screenpower 在 link 恢复时置位
     check("电脑重新上线 → 先亮一下（peek）", scrDecide(SCR_OFF, in, kCfg), SCR_ON);
   }
+  {
+    // 鼠标一动，hostIdleS 掉回 0，即使板子没被摸也该自己亮
+    ScrIn in = base();
+    in.hostIdleS = 0;
+    in.sinceInputMs = 999999;
+    check("鼠标动了一下（idle 归零）→ 自己亮", scrDecide(SCR_OFF, in, kCfg), SCR_ON);
+  }
 
   // ---- 7. 一直在熄屏，别把 OFF 自己抖回 FADE ----
   {
@@ -189,6 +188,6 @@ int main() {
     check("已经是 OFF → 保持 OFF（不反复走淡出）", scrDecide(SCR_OFF, in, kCfg), SCR_OFF);
   }
 
-  printf("\n%s\n", fails == 0 ? "全部通过" : (char*)"有失败项");
+  printf("\n%s\n", fails == 0 ? "全部通过" : "有失败项");
   return fails == 0 ? 0 : 1;
 }

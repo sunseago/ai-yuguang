@@ -52,7 +52,7 @@ Kimi(余额 API + 进程)   ┘
 | 端到端：Wi-Fi → UDP 发现 → 拉取 → 上屏 | ✅ 实测通过（见下方验证记录） |
 | 断连降级与自动重连 | ✅ 实测通过（`bridge LOST` → `OFFLINE` → `ONLINE`） |
 | 陀螺仪（QMI8658）自动转屏 + 触摸同步逆变换 | ✅ 已烧录，`imu=ok`，方向映射已验证自洽 |
-| 屏幕亮灭跟随电脑使用状态 | ✅ 实测：人走开 5 分钟变暗到 15%，回来立刻恢复 |
+| 屏幕亮灭跟随电脑使用状态 | ✅ 实测：人走开 5 分钟变暗、30 分钟熄屏；关机/充电器 60 秒熄屏；PWR 长按手动开关机 |
 | Mac 菜单栏 App（自带 node，一键安装） | ✅ 实测通过：开机自启 / 崩溃自愈 / 孤儿进程回收 |
 | agent 弹框时卡片红闪提醒 | ✅ WorkBuddy / DeepSeek Harness 已端到端验证；Kimi 不支持 |
 | 阈值蜂鸣、OTA、USB 兜底通道 | ⬜ 未做（原 P1） |
@@ -261,7 +261,12 @@ python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bi
 | BOOT 短按（**在信息页**） | 屏幕朝向校准：整体旋转 +90°，自动存 NVS（详见下节） |
 | BOOT 长按 5s | 清空 Wi-Fi 配置重新配网 |
 | USER(板载第二个键)短按 | 三页循环 |
+| **PWR(板载第三个键)长按 1s** | **手动开机/关机**。关机 = 强制熄屏，触摸/其他按键都不唤醒；再长按 1 秒开机 |
 | 转动设备 | 画面自动转正（详见下节） |
+
+> PWR 的"关机"是**屏幕层面的关机**（这块板子靠 USB 供电，没有真正的断电开关）。
+> 关机后板子仍在后台跑（网络照常更新数据），只是背光关掉、输入被忽略；开机后立刻是
+> 最新数据。熄屏时短按 BOOT/USER 只唤醒、不切页/不改亮度，防止"想叫醒结果滑走了页面"。
 
 **状态标签配色**：卡片第二行和详情页的状态都是一个圆角胶囊（`fillRoundRect`，圆角取高度一半）；
 卡片左侧那条 3px 竖条跟胶囊同色，扫一眼就知道哪张在跑、哪张完事了。
@@ -377,14 +382,19 @@ g++ -O1 -I src -o /tmp/rot_test tools/test_rotation.cpp && /tmp/rot_test
 | --- | --- |
 | 电脑在用 | 正常亮度（BOOT 键在 30/60/100 之间切） |
 | 电脑开着、人走开 5 分钟 | 暗到 15%，扫一眼仍能读 |
-| 桥接断了但电脑在 | 保持亮着显示 `NO LINK`，**15 分钟**后才熄，留时间给你去修 |
-| Mac 睡眠 / 关机 / 只插充电器 | 断链 **15 秒**就熄 —— 数据已经是死的，亮着没意义 |
-| 电池供电 | 阈值收紧：1 分钟无输入变暗、断链 15 秒熄屏 |
+| 电脑开着、人走开 30 分钟 | **熄屏**（等价于 Mac 显示器休眠） |
+| 电脑关机 / 睡眠 / 只插充电器 | 断链 **60 秒**后熄屏 —— 数据已经是死的，亮着没意义 |
+| 电池供电 | 阈值收紧：1 分钟变暗、10 分钟熄屏 |
 | 熄屏时摸一下 | 亮 10 秒让你瞄一眼，然后自动熄 |
-| 从没连上过（配网阶段） | 一直亮 —— 黑屏会让人以为板子坏了 |
+| **PWR 长按 1 秒** | **手动开机/关机**。关机时连触摸都不唤醒，再长按一次才开 |
 
 熄屏前会先压到 5% 停 1.5 秒再灭，不会"啪"一下黑掉。电脑重新上线时会主动亮 10 秒打个招呼，
 不用伸手点。
+
+**为什么"熄屏"有两个触发**（断链 + 闲置过久）：很多 Mac 的系统睡眠被别的 app 拉住
+（`pmset -g` 里能看到 `sleep prevented by …`），其实只睡了显示器，桥接一直在线、断链信号
+一直不来。这种情况下只能靠"人多久没动"兜底——默认 30 分钟，和 macOS 的 `displaysleep`
+默认值对齐。
 
 **怎么知道"人在不在"**：桥接每 5 秒读一次 macOS 的 `HIDIdleTime`（距离上次键鼠输入的纳秒数），
 放进 `/v1/state` 的 `host.idle_s`。这是唯一可靠的信号——板子自己的触摸事件不能用来判断，
@@ -392,15 +402,12 @@ g++ -O1 -I src -o /tmp/rot_test tools/test_rotation.cpp && /tmp/rot_test
 
 `host.idle_s = -1` 表示读不到（老桥接 / `ioreg` 失败），设备当作"人在用"，宁亮不熄。
 
-**怎么知道"电脑在不在"**：`Serial.isPlugged()`（USB SOF 中断维护）。注意这和"USB 供电"
-不是一回事——插充电器也供电，但不会枚举成 USB 主机。区分开才能做到"只插充电器时也熄屏"。
-
 决策逻辑在 `src/screenlogic.h`（纯函数，电脑上可单测），硬件胶水在 `src/screenpower.cpp`。
 改阈值只动 `board_config.h` 里那组 `SCR_*`。
 
 ```bash
 cd firmware
-g++ -std=c++17 -O1 -I src -o /tmp/scr tools/test_screenlogic.cpp && /tmp/scr   # 18 项
+g++ -std=c++17 -O1 -I src -o /tmp/scr tools/test_screenlogic.cpp && /tmp/scr   # 20 项
 ```
 
 供电来源判定三条判据任一成立即视为 USB：USB 外设枚举到主机（`Serial.isPlugged()`）、
@@ -555,6 +562,8 @@ python3 tools/gen_font.py unifont.hex src/font_data.h
 | 屏一直亮着，人不在电脑前也不变暗 | 桥接没送 `host.idle_s`。`curl -s 127.0.0.1:8787/v1/state \| python3 -m json.tool \| grep idle` 看一眼；-1 表示 `ioreg` 读不到，设备会当作「人在用」保守不熄 |
 | 只想让屏一直亮着 | `board_config.h` 把 `SCR_DIM_AFTER_HOST_IDLE_MS` 和 `SCR_OFF_AFTER_NOLINK_*` 都调大即可，或者直接把 `SCR_DIM_PERCENT` 改成 100 |
 | 熄屏后摸屏幕没反应 | 第一下是唤醒，只亮 10 秒不翻页；这 10 秒内再点才导航 |
+| `NO LINK` 时一直亮着不熄屏 | 0.1.4 已修。两个根因：①熄屏后 `screenWasOff` 每轮都在记输入，屏幕刚熄就被自己叫醒；②「从没连上过就一直亮」的保护误伤——板子插充电器/电脑关机后重上电，永远连不上桥接，于是永远亮着。配网门户其实在 `netBegin()` 里阻塞运行，根本不需要这条保护，已删除 |
+
 | 设备平放时也在乱转 | 说明 in-plane 阈值太低，把 `imu.cpp` 里 `kTiltInPlane` 调大 |
 
 抓串口用 `firmware/tools/cap.py`（关键是 `dtr = True`）：
@@ -569,7 +578,7 @@ cd firmware && python3 tools/cap.py /dev/cu.usbmodem101 40
 ## 验证记录（2026-11-07，真机）
 
 ```
-[dp] AI余光 0.1.3 boot
+[dp] AI余光 0.1.4 boot
 [dp] psram=8386295 freeheap=326096
 [dp] canvas=ok ptr=0x3d800908          ← 画布落在 PSRAM
 [dp] touch+buttons ready
@@ -578,15 +587,13 @@ cd firmware && python3 tools/cap.py /dev/cu.usbmodem101 40
 [dp] wifi connected ip=192.168.100.190 rssi=-35
 [dp] wifi=1 ip=192.168.100.190 bridge=192.168.100.151
 [dp] first fetch ok, providers=3
-[dp]   #0 WorkBuddy state=IDLE credit=293.43/100.00
-[dp]   #1 DeepSeek  state=IDLE balance=12.86 CNY spend/d=0.67 burn=2.0
-[dp]   #2 Kimi      state=IDLE credit=0.00/50.00
+[dp]   #0 WorkBuddy state=IDLE credit=579.00/100.00
+[dp]   #1 DeepSeek  state=IDLE balance=12.53 CNY
+[dp]   #2 Kimi      state=THINKING credit=0.00/50.00
 [dp] bridge ONLINE
-[dp] imu quad=3 ax=-0.91 ay=0.05 az=-0.44 -> base=3 off=2 (rot now 2)
-[dp] rotate=1 (90 deg) ax=-0.91 ay=0.05 az=-0.44
-[dp] t=30s wifi=1 link=1 heap=271160 psram_free=8140543 rot=1 imu=ok pwr=USB 97%
-     gap=45ms scr=on idle=189s br=60 g=-0.91,0.05,-0.44 flat=0
-     | workbuddy:IDLE 293/100 | deepseek:IDLE 12.86 | kimi:IDLE 0/50
+[dp] t=30s wifi=1 link=1 heap=271168 psram_free=8140543 rot=1 imu=ok pwr=USB 97%
+     gap=45ms scr=on idle=0s br=60 g=-0.57,-0.02,-0.84 flat=0
+     | workbuddy:IDLE 579/100 | deepseek:IDLE 12.53 | kimi:THINKING 0/50
 ```
 
 `scr=` 是屏幕策略现场（`on`/`dim`/`off`）+ `idle=` 电脑闲置秒数 + `br=` 当前背光百分比。

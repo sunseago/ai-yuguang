@@ -24,6 +24,10 @@ bool s_bootShortFired = false;
 bool s_userDown = false;
 uint32_t s_userDownAt = 0;
 bool s_userShortFired = false;
+bool s_pwrDown = false;
+uint32_t s_pwrDownAt = 0;
+bool s_pwrFired = false;
+bool s_pwrArmed = true;
 
 struct TouchPoint {
   bool down;
@@ -115,6 +119,24 @@ void inputPoll() {
     s_userDown = false;
     if (now - s_userDownAt > 60 && now - s_userDownAt < 3000) s_userShortFired = true;
   }
+
+  // PWR 键：长按 1 秒触发一次"开机/关机"。armed 锁存保证一次按下只触发一次，
+  // 松开重按才会再次触发——否则长按期间会反复翻转（像 BOOT 长按那样靠重启兜底，
+  // 这里没有重启可兜，必须自己锁住）。
+  bool pwr = digitalRead(BTN_PWR) == LOW;
+  if (pwr && !s_pwrDown) {
+    s_pwrDown = true;
+    s_pwrDownAt = now;
+    s_pwrArmed = true;
+    s_pwrFired = false;
+  } else if (pwr && s_pwrDown && s_pwrArmed) {
+    if (now - s_pwrDownAt >= 1000) {
+      s_pwrFired = true;
+      s_pwrArmed = false;
+    }
+  } else if (!pwr && s_pwrDown) {
+    s_pwrDown = false;
+  }
 }
 
 DpGesture inputTakeGesture(int& x, int& y) {
@@ -142,5 +164,11 @@ bool inputTakeBootLong() {
 bool inputTakeUserShort() {
   bool v = s_userShortFired;
   s_userShortFired = false;
+  return v;
+}
+
+bool inputTakePwrLong() {
+  bool v = s_pwrFired;
+  s_pwrFired = false;
   return v;
 }

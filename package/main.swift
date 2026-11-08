@@ -21,7 +21,7 @@ import ServiceManagement
 // ---------- 常量 ----------
 let kPort = 8787
 let kLabel = "cn.deskpulse.app.startup"
-let kVersion = "0.1.3"
+let kVersion = "0.1.4"
 /// 显示名。菜单栏、菜单标题、各处提示都用这一个，改名字只改这里。
 /// 最终定名「AI余光」——不是「余光」，也不是「Agent余光」，别自作主张简写。
 let kAppName = "AI余光"

@@ -44,29 +44,31 @@
 // 画面立刻转动，选到正的为止，会自动存进 NVS。改这里只是改出厂值。
 #define IMU_ROT_OFFSET 2
 
-// ---- 屏幕电源策略（详见 screenpower.cpp）----
+// ---- 屏幕电源策略（详见 screenlogic.h / screenpower.cpp）----
 // 核心：跟"电脑用不用"走，不跟"插没插电"走。
 //
-// 电脑在（USB 主机枚举着）时：
-//   5 分钟没键鼠输入 → 暗到 15%
-//   桥接断了 → 保持亮着显示 NO LINK，15 分钟后熄（给你留时间去修）
-// 电脑不在（Mac 睡眠/关机、只插充电器、纯电池）时：
-//   桥接一断，15 秒就熄 —— 数据已经是死的，亮着纯粹浪费
-// 电池供电时阈值收紧（没有墙插兜底，省电优先）：
-//   1 分钟没输入就暗
-#define SCR_DIM_AFTER_HOST_IDLE_MS 300000UL      // USB：5 分钟无输入变暗
-#define SCR_DIM_AFTER_HOST_IDLE_BAT_MS 60000UL   // 电池：1 分钟无输入变暗
-#define SCR_DIM_PERCENT 15                       // 暗档亮度
-#define SCR_OFF_AFTER_NOLINK_USB_MS 900000UL     // USB：断链 15 分钟熄屏
-#define SCR_OFF_AFTER_NOLINK_BAT_MS 15000UL      // 无 USB 主机：断链 15 秒熄屏
-#define SCR_WAKE_PEEK_MS 10000UL                 // 熄屏后点一下，亮 10 秒
-#define SCR_OFF_FADE_MS 1500                     // 熄屏前先压到 5% 再灭，别瞬间黑
+// 三档：ON（正常）→ DIM（15%）→ OFF（熄屏）。
+// 进入 OFF 有两个触发：
+//   ① 断链 —— 电脑关机 / 系统真睡了 / 只插充电器但电脑没在跑
+//   ② 闲置过久 —— 电脑开着但人走开足够久（等价于 Mac 显示器休眠，
+//      默认 displaysleep=30 分钟）。很多机器系统被别的 app 拉着根本不睡，
+//      断链信号一直不来，只能靠这个兜底。
+//
+// 墙插（USB 供电或充电器）用宽松档，电池用收紧档。
+#define SCR_DIM_AFTER_IDLE_WALL_MS 300000UL    // 墙插：5 分钟没输入 → 变暗
+#define SCR_DIM_AFTER_IDLE_BATT_MS 60000UL     // 电池：1 分钟没输入 → 变暗
+#define SCR_OFF_AFTER_IDLE_WALL_MS 1800000UL   // 墙插：30 分钟没输入 → 熄屏（≈显示器休眠）
+#define SCR_OFF_AFTER_IDLE_BATT_MS 600000UL    // 电池：10 分钟没输入 → 熄屏
+#define SCR_OFF_AFTER_NOLINK_MS 60000UL        // 断链 60 秒 → 熄屏（容忍短暂抖动）
+#define SCR_DIM_PERCENT 15                     // 暗档亮度
+#define SCR_WAKE_PEEK_MS 10000UL               // 熄屏后点一下，亮 10 秒
+#define SCR_OFF_FADE_MS 1500                   // 熄屏前先压到 5% 再灭，别瞬间黑
 #define SCR_OFF_FADE_PERCENT 5
-#define SCR_MAX_LEVEL 100                        // 亮度上限（百分比）
+#define SCR_MAX_LEVEL 100                      // 亮度上限（百分比）
 
 // ---- 按键（低电平有效）----
 #define BTN_BOOT 0   // 短按切亮度，长按 5s 重新配网
 #define BTN_USER 5   // 短按切页
-#define BTN_PWR 4    // 备用
+#define BTN_PWR 4    // 长按 1s 开机/关机
 
-#define DP_FW_VERSION "0.1.3"
+#define DP_FW_VERSION "0.1.4"

@@ -11,7 +11,8 @@ void inputInit();
 void inputPoll();  // 每 20ms 调一次
 DpGesture inputTakeGesture(int& x, int& y);
 
-// 按键：BOOT 短按切亮度 / 长按 5s 重新配网；USER 短按切页
+// 按键：BOOT 短按切亮度 / 长按 5s 重新配网；USER 短按切页；PWR 长按 1s 开机/关机
 bool inputTakeBootShort();
 bool inputTakeBootLong();
 bool inputTakeUserShort();
+bool inputTakePwrLong();

@@ -153,6 +153,8 @@ void loop() {
   // 熄屏状态下这一下的触摸只用于唤醒，不能顺带翻页/点卡片 ——
   // 否则会出现"想叫醒屏幕，结果把页面滑走了"。
   const bool screenWasOff = screenPowerIsOff();
+  // 手动关机（PWR 长按）时连唤醒都不该有：只有再长按一次 PWR 才能开机。
+  const bool manualOff = screenPowerIsManualOff();
 
   uint32_t now = millis();
 
@@ -180,10 +182,12 @@ void loop() {
                      (unsigned)displayRotation(), gImuOk ? "ok" : "--", powerLabel());
     n += snprintf(beat + n, sizeof(beat) - n, " gap=%lums", (unsigned long)gMaxGap);
     gMaxGap = 0;
-    // 屏幕策略的现场：on/dim/off + 电脑空闲秒数 + 亮多少。
-    // 判断"为什么屏黑了"只看这一小段就够。
+    // 屏幕策略的现场：on/dim/off/manual + 电脑空闲秒数 + 亮多少。
+    // 判断"为什么屏黑了"只看这一小段就够。manual = PWR 长按的手动关机。
     n += snprintf(beat + n, sizeof(beat) - n, " scr=%s idle=%lds br=%u",
-                  screenPowerIsOff() ? "off" : (screenPowerIsDim() ? "dim" : "on"),
+                  screenPowerIsManualOff()
+                      ? "manual"
+                      : (screenPowerIsOff() ? "off" : (screenPowerIsDim() ? "dim" : "on")),
                   (long)gModel.hostIdleS, (unsigned)screenPowerLevel());
     if (gImuOk) {
       float ax, ay, az, ip;
@@ -212,11 +216,13 @@ void loop() {
   bool active = false;
   int tx = 0, ty = 0;
   DpGesture g = inputTakeGesture(tx, ty);
+  // 只要这一圈真的有触摸，就算"有输入"（用于唤醒计时）。手势本身是否触发导航另说：
+  // 熄屏时这一下只唤醒，不导航——所以要先把"有输入"记下来，再把手势吞掉。
+  if (g != DP_G_NONE) active = true;
   if (screenWasOff && g != DP_G_NONE) {
     g = DP_G_NONE;   // 只当作"叫醒"，不导航
   }
   if (g == DP_G_TAP) {
-    active = true;
     if (gPage == 0) {
       int idx = uiHitCard(gModel, tx, ty);
       if (idx >= 0) {
@@ -232,13 +238,11 @@ void loop() {
       gDirty = true;
     }
   } else if (g == DP_G_SWIPE_LEFT) {
-    active = true;
     if (gPage == 0) {
       gPage = 2;
       gDirty = true;
     }
   } else if (g == DP_G_SWIPE_RIGHT) {
-    active = true;
     if (gPage != 0) {
       gPage = 0;
       gDirty = true;
@@ -249,7 +253,14 @@ void loop() {
   bool bootShort = inputTakeBootShort();
   bool bootLong = inputTakeBootLong();
   bool userShort = inputTakeUserShort();
+  bool pwrLong = inputTakePwrLong();
   if (bootShort || bootLong || userShort) active = true;
+
+  // PWR 长按：手动开机/关机。无论屏幕什么状态都要响应，所以不放在"熄屏"过滤里。
+  if (pwrLong) {
+    screenPowerToggleManualOff();
+    Serial.printf("[dp] manual power %s\n", screenPowerIsManualOff() ? "OFF" : "ON");
+  }
 
   // 熄屏时短按也只用来唤醒。长按（重新配网）不拦——那是"不管屏幕怎样都要生效"的操作。
   if (screenWasOff) {
@@ -272,10 +283,12 @@ void loop() {
 
   // ---- 屏幕电源策略 ----
   // 跟"电脑用不用"走，不跟"插没插电"走：人在电脑前就亮，人走开变暗，电脑停了熄屏。
-  // 判据和阈值都在 screenpower.cpp / board_config.h 里，这里只喂输入。
-  if (active || screenWasOff) screenPowerNoteInput();
-  screenPowerUpdate(gModel, gModel.bridgeOnline, powerUsbHostPresent(),
-                    kBrightSteps[gBrightIdx]);
+  // 判据和阈值都在 screenlogic.h / board_config.h 里，这里只喂输入。
+  //
+  // 只把"这一圈真实发生了输入"记进去。绝不能因为"屏幕正熄着"就持续记输入——
+  // 那样会每轮都把空闲计时清零，屏幕刚熄就自己把自己叫醒，永远熄不掉。
+  if (active && !manualOff) screenPowerNoteInput();
+  screenPowerUpdate(gModel, gModel.bridgeOnline, !powerOnUsb(), kBrightSteps[gBrightIdx]);
 
   if (bootShort) {
     if (gPage == 2) {

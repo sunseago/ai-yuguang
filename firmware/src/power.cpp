@@ -82,17 +82,6 @@ bool powerOnUsb() {
   return usb;
 }
 
-bool powerUsbHostPresent() {
-#if DP_HAS_HWCDC
-  // isPlugged() 只看 USB 有没有枚举到主机。充电器不会枚举，所以这里为假；
-  // Mac 睡眠时总线挂起，也为假。正是"电脑醒着并且在"的语义。
-  return Serial.isPlugged();
-#else
-  // 编译配置不支持 HWCDC 时无从判断，保守返回 true：宁可亮着也别误熄。
-  return true;
-#endif
-}
-
 int8_t powerBatteryPercent() {
   return voltageToPercent(powerBatteryVoltage());
 }

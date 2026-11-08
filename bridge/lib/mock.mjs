@@ -38,7 +38,7 @@ export function mockState(startedAt) {
 
   return {
     ts: t,
-    bridge: { ver: '0.1.3', uptime_s: Math.round((t - startedAt) / 1000), host: 'mock' },
+    bridge: { ver: '0.1.4', uptime_s: Math.round((t - startedAt) / 1000), host: 'mock' },
     providers,
   };
 }

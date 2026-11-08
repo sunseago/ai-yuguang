@@ -132,7 +132,7 @@ async function buildState() {
   return {
     ts: Date.now(),
     bridge: {
-      ver: '0.1.3',
+      ver: '0.1.4',
       uptime_s: Math.round((Date.now() - startedAt) / 1000),
       host: os.hostname(),
       // 设备没有 NTP 也能显示正确时间：桥接直接把本地时钟格式化好
@@ -204,7 +204,7 @@ function lanIp() {
 const udp = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 udp.on('message', (msg, rinfo) => {
   if (!msg.toString().startsWith('DESKPULSE?')) return;
-  const reply = Buffer.from(JSON.stringify({ host: lanIp(), port: cfg.port, ver: '0.1.3' }));
+  const reply = Buffer.from(JSON.stringify({ host: lanIp(), port: cfg.port, ver: '0.1.4' }));
   udp.send(reply, rinfo.port, rinfo.address);
 });
 udp.on('error', (e) => log('UDP error:', e.message));
