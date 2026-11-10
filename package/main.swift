@@ -19,12 +19,13 @@ import Foundation
 import ServiceManagement
 
 // ---------- 常量 ----------
-let kPort = 8787
 let kLabel = "cn.deskpulse.app.startup"
-let kVersion = "0.1.4"
 /// 显示名。菜单栏、菜单标题、各处提示都用这一个，改名字只改这里。
 /// 最终定名「AI余光」——不是「余光」，也不是「Agent余光」，别自作主张简写。
 let kAppName = "AI余光"
+/// 版本号唯一来源是 Info.plist（build-app.sh 从 bridge/version.json 写入）。
+/// 之前这里硬编码 0.1.4，和桥接/固件各写一份，升级时必漏。
+let kVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev"
 
 let fm = FileManager.default
 let home = fm.homeDirectoryForCurrentUser
@@ -34,7 +35,22 @@ let logsDir = home.appendingPathComponent("Library/Logs")
 let engineLog = logsDir.appendingPathComponent("DeskPulse.log")
 let agentsDir = home.appendingPathComponent("Library/LaunchAgents")
 let startupPlist = agentsDir.appendingPathComponent("\(kLabel).plist")
+
+/// 端口跟随用户配置：桥接读的是同一份 config.json，
+/// 写死 8787 会让「改了端口的用户」在菜单里永远看到"未运行"。
+func configuredPort() -> Int {
+    let cfg = supportDir.appendingPathComponent("config.json")
+    guard
+        let data = try? Data(contentsOf: cfg),
+        let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let p = obj["port"] as? Int,
+        (1...65535).contains(p)
+    else { return 8787 }
+    return p
+}
+let kPort = configuredPort()
 let stateURL = URL(string: "http://127.0.0.1:\(kPort)/v1/state")!
+let healthURL = URL(string: "http://127.0.0.1:\(kPort)/healthz")!
 
 func res(_ name: String) -> URL? {
     guard let r = Bundle.main.resourceURL else { return nil }
@@ -60,9 +76,19 @@ func run(_ path: String, _ args: [String]) -> Int32 {
     return p.terminationStatus
 }
 
-/// 探一下端口上有没有活的桥接。返回 (是否在线, 供应商标识列表)
+private func parseProviderNames(_ data: Data?) -> [String] {
+    guard
+        let d = data,
+        let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+        let arr = obj["providers"] as? [[String: Any]]
+    else { return [] }
+    return arr.compactMap { $0["name"] as? String }
+}
+
+/// 同步探测：只给 `--status` 这类一次性命令行用。
+/// 菜单刷新绝不能用它 —— 在主线程等信号量会把菜单卡住好几秒。
 func probe() -> (up: Bool, providers: [String]) {
-    var req = URLRequest(url: URL(string: "http://127.0.0.1:\(kPort)/healthz")!)
+    var req = URLRequest(url: healthURL)
     req.timeoutInterval = 0.8
     let sem = DispatchSemaphore(value: 0)
     var up = false
@@ -77,15 +103,28 @@ func probe() -> (up: Bool, providers: [String]) {
     var sreq = URLRequest(url: stateURL)
     sreq.timeoutInterval = 1.2
     URLSession.shared.dataTask(with: sreq) { data, _, _ in
-        if let d = data,
-           let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-           let arr = obj["providers"] as? [[String: Any]] {
-            names = arr.compactMap { $0["name"] as? String }
-        }
+        names = parseProviderNames(data)
         sem.signal()
     }.resume()
     _ = sem.wait(timeout: .now() + 2.0)
     return (true, names)
+}
+
+/// 异步探测：菜单栏专用。回调在后台线程，调用方自己切回主线程。
+func probeAsync(_ done: @escaping (Bool, [String]) -> Void) {
+    var req = URLRequest(url: healthURL)
+    req.timeoutInterval = 0.8
+    URLSession.shared.dataTask(with: req) { _, resp, _ in
+        guard let h = resp as? HTTPURLResponse, h.statusCode == 200 else {
+            done(false, [])
+            return
+        }
+        var sreq = URLRequest(url: stateURL)
+        sreq.timeoutInterval = 1.2
+        URLSession.shared.dataTask(with: sreq) { data, _, _ in
+            done(true, parseProviderNames(data))
+        }.resume()
+    }.resume()
 }
 
 // ---------- 开机自启 ----------
@@ -210,16 +249,33 @@ final class Engine {
 
     func stop() {
         shouldRun = false
-        child?.terminate()
+        if let c = child, c.isRunning {
+            c.terminate()
+            // 等它真的退出：否则下一次启动会撞上还没释放的端口，
+            // 菜单里就会莫名其妙变成"外部实例占用"。
+            c.waitUntilExit()
+        }
         child = nil
     }
 
     func restart() {
+        let wasExternal = external
         child?.terminate()
         child = nil
-        external = false
         shouldRun = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.start() }
+        if wasExternal {
+            // 本来就不是我们起的（用户手动 node 起的），只重新探测，别抢端口
+            external = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.start() }
+            return
+        }
+        external = false
+        // 自己刚终止的那个实例需要一点时间释放端口；这时候 probe() 会误判成
+        // "外部实例"，所以直接 spawn，不走探测。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self, self.shouldRun else { return }
+            self.spawn()
+        }
     }
 
     private func spawn() {
@@ -333,10 +389,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) { refresh() }
 
+    /// 刷新中标记：探针是异步的，上一发没回来就跳过这一拍，
+    /// 避免桥接不在线时堆起一串并发请求。
+    private var refreshing = false
+
     func refresh() {
-        let p = probe()
-        online = p.up
-        providers = p.providers
+        if refreshing { return }
+        refreshing = true
+        probeAsync { [weak self] up, names in
+            // URLSession 回调在后台线程，UI 必须回主线程改
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.refreshing = false
+                self.online = up
+                self.providers = names
+                self.applyStatus()
+            }
+        }
+    }
+
+    /// 把探测结果写进菜单。主线程执行，不再有任何同步等待。
+    private func applyStatus() {
         updateTitle()
 
         if online {
@@ -406,12 +479,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func quit() {
+        // stop() 里已经 terminate + waitUntilExit（原来是先 stop 再取 child，
+        // child 早被置 nil，那段"收干净"其实是死代码）
         engine.stop()
-        // 退出前把子进程收干净，避免留下孤儿占着端口
-        if let c = engine.child, c.isRunning {
-            c.terminate()
-            c.waitUntilExit()
-        }
         NSApp.terminate(nil)
     }
 
@@ -465,8 +535,11 @@ if argv.contains("--status") {
 }
 
 // 单实例：已经在跑就退出（比如登录自启和手动双击撞上）
+// 按 PID 比，不按对象相等比：NSRunningApplication 的 == 是对象身份，
+// 不保证 runningApplications() 返回的就是 current 那一个实例。
+let myPid = ProcessInfo.processInfo.processIdentifier
 let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
-    .filter { $0 != NSRunningApplication.current }
+    .filter { $0.processIdentifier != myPid }
 if !others.isEmpty {
     exit(0)
 }

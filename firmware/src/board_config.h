@@ -71,4 +71,11 @@
 #define BTN_USER 5   // 短按切页
 #define BTN_PWR 4    // 长按 1s 开机/关机
 
-#define DP_FW_VERSION "0.1.4"
+// 版本号由 platformio.ini 的 extra_scripts 在编译前生成（来源 bridge/version.json）。
+// 保留 fallback 是为了让 IDE/单独编译头文件时不至于报未定义。
+#if __has_include("version_gen.h")
+#include "version_gen.h"
+#endif
+#ifndef DP_FW_VERSION
+#define DP_FW_VERSION "dev"
+#endif

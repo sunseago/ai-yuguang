@@ -10,7 +10,7 @@
 //      这是 Kimi 会员的"剩余额度"语义（它是订阅制，没有 ¥ 余额）。
 import os from 'node:os';
 import path from 'node:path';
-import { readLocalStorage, getLocalStorage, decodeJwtPayload } from './leveldb-log.mjs';
+import { readLocalStorage, getLocalStorage, decodeJwtPayload, scanJwtTokens } from './leveldb-log.mjs';
 
 export const KIMI_ORIGIN = 'https://www.kimi.com';
 export const DEFAULT_APP_DATA = path.join(os.homedir(), 'Library', 'Application Support', 'kimi-desktop');
@@ -19,10 +19,20 @@ export const DEFAULT_APP_DATA = path.join(os.homedir(), 'Library', 'Application 
 export function readKimiSession(appDataDir = DEFAULT_APP_DATA) {
   const dir = path.join(appDataDir, 'Local Storage', 'leveldb');
   const map = readLocalStorage(dir);
-  if (map.size === 0) return null;
-  const access = getLocalStorage(map, KIMI_ORIGIN, 'access_token');
-  const refresh = getLocalStorage(map, KIMI_ORIGIN, 'refresh_token');
+  let access = map.size ? getLocalStorage(map, KIMI_ORIGIN, 'access_token') : null;
+  let refresh = map.size ? getLocalStorage(map, KIMI_ORIGIN, 'refresh_token') : null;
+
+  // WAL 里没有令牌，通常意味着 Chromium 已经把它压实进 .ldb 了。
+  // 这时扫 .ldb 里的明文 JWT 兜底，否则额度会一直显示"未找到登录态"。
+  if (!refresh) {
+    const scanned = scanJwtTokens(dir);
+    if (scanned.refresh) {
+      refresh = scanned.refresh;
+      access = access || scanned.access;
+    }
+  }
   if (!refresh) return null;
+
   const claims = decodeJwtPayload(refresh) || {};
   return {
     access,

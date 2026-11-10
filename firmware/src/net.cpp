@@ -24,11 +24,17 @@ DNSServer* s_dns = nullptr;
 char s_ssid[33] = {0};
 char s_pass[65] = {0};
 char s_host[40] = {0};
+char s_token[33] = {0};   // 可选：桥接鉴权 token，留空表示不启用
 uint16_t s_port = 8787;
 char s_ip[20] = "-";
 char s_clock[8] = "--:--";
 bool s_wifiOk = false;
+int8_t s_rssi = 0;
 uint32_t s_lastReconnect = 0;
+
+// 这些字符串/标志由 core 0 的网络任务写、core 1 的 UI 读，读写都要过同一把锁。
+// 取值的 getter 会把内容拷到自己的静态缓冲里再返回，避免调用方拿到撕裂的字符串。
+portMUX_TYPE s_netMux = portMUX_INITIALIZER_UNLOCKED;
 
 uint8_t stateFromString(const char* s) {
   if (!s) return DP_ST_IDLE;
@@ -54,6 +60,7 @@ void loadConfig() {
   s_prefs.getString("ssid", "").toCharArray(s_ssid, sizeof(s_ssid));
   s_prefs.getString("pass", "").toCharArray(s_pass, sizeof(s_pass));
   s_prefs.getString("host", "").toCharArray(s_host, sizeof(s_host));
+  s_prefs.getString("token", "").toCharArray(s_token, sizeof(s_token));
   s_port = (uint16_t)s_prefs.getUShort("port", 8787);
   s_prefs.end();
 }
@@ -63,6 +70,7 @@ bool saveConfig(const String& ssid, const String& pass, const String& host, uint
   s_prefs.putString("ssid", ssid);
   s_prefs.putString("pass", pass);
   s_prefs.putString("host", host);
+  s_prefs.putString("token", s_token);
   s_prefs.putUShort("port", port);
   s_prefs.end();
   return true;
@@ -83,6 +91,7 @@ button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:10px;backg
 <label>Wi-Fi 名称</label><input name="ssid" required>
 <label>Wi-Fi 密码</label><input name="pass" type="password">
 <label>电脑地址（可留空，自动发现）</label><input name="host" placeholder="192.168.1.10">
+<label>访问令牌（可留空；需与电脑端 config.json 的 authToken 一致）</label><input name="token" placeholder="可选">
 <button type="submit">保存并重启</button></form></html>)HTML";
 
 void startConfigPortal() {
@@ -99,6 +108,9 @@ void startConfigPortal() {
     String ssid = s_server->arg("ssid");
     String pass = s_server->arg("pass");
     String host = s_server->arg("host");
+    // 可选鉴权 token：留空即关闭，与桥接侧 authToken 保持一致才能取到数据
+    String token = s_server->arg("token");
+    token.toCharArray(s_token, sizeof(s_token));
     saveConfig(ssid, pass, host, 8787);
     s_server->send(200, "text/html; charset=utf-8",
                    "<meta charset=utf-8><body style='font-family:sans-serif;padding:24px'>"
@@ -118,7 +130,7 @@ void startConfigPortal() {
     c.text(12, 40, "SETUP MODE", dpcolor::TEXT, 2);
     c.text(12, 84, "1. join wifi:", dpcolor::MUTED, 1);
     c.text(12, 102, apName.c_str(), dpcolor::THINK, 1);
-    c.text(12, 120, "   pass deskpulse", dpcolor::MUTED, 1);
+    c.text(12, 120, "   pass yuguang", dpcolor::MUTED, 1);
     c.text(12, 150, "2. open 192.168.4.1", dpcolor::MUTED, 1);
     displayPush(buf);
   }
@@ -140,8 +152,14 @@ void connectWifi(uint32_t timeoutMs) {
   }
   s_wifiOk = WiFi.status() == WL_CONNECTED;
   if (s_wifiOk) {
-    strncpy(s_ip, WiFi.localIP().toString().c_str(), sizeof(s_ip) - 1);
-    Serial.printf("[dp] wifi connected ip=%s rssi=%d\n", s_ip, (int)WiFi.RSSI());
+    String ip = WiFi.localIP().toString();
+    const int8_t rssi = (int8_t)WiFi.RSSI();
+    portENTER_CRITICAL(&s_netMux);
+    strncpy(s_ip, ip.c_str(), sizeof(s_ip) - 1);
+    s_ip[sizeof(s_ip) - 1] = '\0';
+    s_rssi = rssi;
+    portEXIT_CRITICAL(&s_netMux);
+    Serial.printf("[dp] wifi connected ip=%s rssi=%d\n", ip.c_str(), (int)rssi);
   } else {
     Serial.println("[dp] wifi connect failed");
   }
@@ -151,8 +169,11 @@ void connectWifi(uint32_t timeoutMs) {
 bool discoverBridge() {
   WiFiUDP udp;
   udp.begin(8789);
+  // 按真实子网掩码算广播地址，别写死 /24 —— 10.x/16 或手动掩码的网络里
+  // 原来那个 255 结尾的广播包根本到不了桥接。
   IPAddress bc = WiFi.localIP();
-  bc[3] = 255;
+  IPAddress mask = WiFi.subnetMask();
+  for (int i = 0; i < 4; i++) bc[i] = bc[i] | (uint8_t)(~mask[i]);
   for (int attempt = 0; attempt < 3; attempt++) {
     udp.beginPacket(bc, 8788);
     udp.write((const uint8_t*)"DESKPULSE?", 10);
@@ -202,13 +223,22 @@ void netBegin() {
 }
 
 void netLoop() {
-  bool ok = WiFi.status() == WL_CONNECTED;
+  const bool ok = WiFi.status() == WL_CONNECTED;
+  // RSSI 只在这里（core 0）读，UI 侧用缓存值，避免两个核同时动 WiFi 驱动。
+  // 注意读取必须在临界区外：WiFi 驱动内部自己有锁，关中断时调用有死锁风险。
+  const int8_t rssi = ok ? (int8_t)WiFi.RSSI() : 0;
+  String ip;
+  if (ok) ip = WiFi.localIP().toString();
+
+  portENTER_CRITICAL(&s_netMux);
   s_wifiOk = ok;
+  s_rssi = rssi;
   if (ok) {
-    String ip = WiFi.localIP().toString();
     strncpy(s_ip, ip.c_str(), sizeof(s_ip) - 1);
-    return;
+    s_ip[sizeof(s_ip) - 1] = '\0';
   }
+  portEXIT_CRITICAL(&s_netMux);
+  if (ok) return;
   // 断线重连，10s 一次，避免把射频打爆
   if (millis() - s_lastReconnect > 10000) {
     s_lastReconnect = millis();
@@ -217,23 +247,42 @@ void netLoop() {
   }
 }
 
+// 状态 JSON 正常只有几 KB。不设上限的话，一个异常/恶意响应就能把
+// ESP32 的堆和 ArduinoJson 的动态文档吃光（桥接默认监听在 LAN 上）。
+constexpr int kMaxStateBytes = 16384;
+
 bool netFetch(DpModel& m) {
   if (!s_wifiOk || !s_host[0]) return false;
 
   char url[96];
+  char token[33];
+  portENTER_CRITICAL(&s_netMux);
   snprintf(url, sizeof(url), "http://%s:%u/v1/state", s_host, (unsigned)s_port);
+  memcpy(token, s_token, sizeof(token));
+  portEXIT_CRITICAL(&s_netMux);
 
   HTTPClient http;
   http.setConnectTimeout(2500);
   http.setTimeout(2500);
   if (!http.begin(url)) return false;
+  if (token[0]) http.addHeader("X-DP-Token", token);
   int code = http.GET();
   if (code != 200) {
     http.end();
     return false;
   }
+  const int bodySize = http.getSize();
+  if (bodySize > kMaxStateBytes) {
+    Serial.printf("[dp] state too large: %d bytes\n", bodySize);
+    http.end();
+    return false;
+  }
   String payload = http.getString();
   http.end();
+  if ((int)payload.length() > kMaxStateBytes) {
+    Serial.printf("[dp] state too large: %u bytes\n", (unsigned)payload.length());
+    return false;
+  }
 
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload);
@@ -248,7 +297,10 @@ bool netFetch(DpModel& m) {
 
   const char* lt = doc["bridge"]["localTime"] | "";
   if (lt[0]) {
+    portENTER_CRITICAL(&s_netMux);
     strncpy(s_clock, lt, sizeof(s_clock) - 1);
+    s_clock[sizeof(s_clock) - 1] = '\0';
+    portEXIT_CRITICAL(&s_netMux);
   }
 
   JsonArray arr = doc["providers"].as<JsonArray>();
@@ -311,15 +363,50 @@ bool netFetch(DpModel& m) {
   return true;
 }
 
-bool netOnline() { return s_wifiOk; }
-int8_t netRssi() { return s_wifiOk ? (int8_t)WiFi.RSSI() : 0; }
-const char* netIp() { return s_ip; }
-const char* netBridgeHost() { return s_host[0] ? s_host : "-"; }
-const char* netClockText() { return s_clock; }
+bool netOnline() {
+  portENTER_CRITICAL(&s_netMux);
+  bool v = s_wifiOk;
+  portEXIT_CRITICAL(&s_netMux);
+  return v;
+}
+// 用 core 0 缓存的值，不在 UI 核上直接调 WiFi.RSSI()
+int8_t netRssi() {
+  portENTER_CRITICAL(&s_netMux);
+  int8_t v = s_rssi;
+  portEXIT_CRITICAL(&s_netMux);
+  return v;
+}
+const char* netIp() {
+  static char out[20];
+  portENTER_CRITICAL(&s_netMux);
+  memcpy(out, s_ip, sizeof(out));
+  portEXIT_CRITICAL(&s_netMux);
+  return out;
+}
+const char* netBridgeHost() {
+  static char out[40];
+  portENTER_CRITICAL(&s_netMux);
+  if (s_host[0]) memcpy(out, s_host, sizeof(out));
+  else strcpy(out, "-");
+  portEXIT_CRITICAL(&s_netMux);
+  return out;
+}
+const char* netClockText() {
+  static char out[8];
+  portENTER_CRITICAL(&s_netMux);
+  memcpy(out, s_clock, sizeof(out));
+  portEXIT_CRITICAL(&s_netMux);
+  return out;
+}
 
 void netSetHost(const char* host) {
+  char hostCopy[40];
+  portENTER_CRITICAL(&s_netMux);
   strncpy(s_host, host, sizeof(s_host) - 1);
-  saveConfig(String(s_ssid), String(s_pass), String(s_host), s_port);
+  s_host[sizeof(s_host) - 1] = '\0';
+  memcpy(hostCopy, s_host, sizeof(hostCopy));
+  portEXIT_CRITICAL(&s_netMux);
+  saveConfig(String(s_ssid), String(s_pass), String(hostCopy), s_port);
 }
 
 void netClearConfig() {
@@ -345,28 +432,32 @@ namespace {
 struct NetShare {
   DpModel model;
   bool online;
-  uint32_t seq;   // 每发布一次自增，UI 侧据此判断"有没有新数据"
+  uint32_t version;   // 全局单调递增，UI 据此判断"有没有新数据"
 };
 
-NetShare s_share;
-portMUX_TYPE s_shareMux = portMUX_INITIALIZER_UNLOCKED;
+// 双缓冲：写者只改「非活动」那一块，写完才切换索引；读者从活动块拷到
+// 本地临时对象，确认版本没变再提交。这样 1KB 的 model 拷贝不必关中断，
+// 也不会把半份数据交给 UI（旧实现是在 portENTER_CRITICAL 里整块拷）。
+NetShare s_share[2];
+volatile uint8_t s_active = 0;
+uint32_t s_version = 0;
 
-void publishModel(const DpModel& m, bool online) {
-  portENTER_CRITICAL(&s_shareMux);
-  s_share.model = m;
-  s_share.online = online;
-  s_share.seq++;
-  portEXIT_CRITICAL(&s_shareMux);
+void publish(const DpModel& m, bool online) {
+  const uint8_t next = (uint8_t)(s_active ^ 1);
+  NetShare& slot = s_share[next];
+  slot.model = m;
+  slot.online = online;
+  slot.version = ++s_version;
+  __sync_synchronize();
+  s_active = next;
 }
 
+void publishModel(const DpModel& m, bool online) { publish(m, online); }
+
 void publishOffline() {
-  portENTER_CRITICAL(&s_shareMux);
-  // 只在状态真的变化时自增，免得 UI 每 2 秒都白拷一遍 1KB
-  if (s_share.online) {
-    s_share.online = false;
-    s_share.seq++;
-  }
-  portEXIT_CRITICAL(&s_shareMux);
+  // 只在状态真的变化时发布，免得 UI 每 2 秒都白拷一遍
+  if (!s_share[s_active].online) return;
+  publish(s_share[s_active].model, false);
 }
 
 void netTask(void*) {
@@ -404,22 +495,34 @@ void netPublishInitial(const DpModel& m) {
   publishModel(m, true);
 }
 
-void netStartPolling() {
+bool netStartPolling() {
   // core 0 留给网络；Arduino 的 loopTask（UI、触摸、IMU、SPI）在 core 1，互不抢占。
   // 栈给 10KB：HTTPClient + ArduinoJson 在任务栈上，8KB 偏紧。
-  xTaskCreatePinnedToCore(netTask, "dp-net", 10240, nullptr, 1, nullptr, 0);
+  const BaseType_t ok =
+      xTaskCreatePinnedToCore(netTask, "dp-net", 10240, nullptr, 1, nullptr, 0);
+  if (ok != pdPASS) {
+    Serial.println("[dp] ERROR: xTaskCreatePinnedToCore(dp-net) failed");
+    return false;
+  }
+  return true;
 }
 
 bool netTakeSnapshot(DpModel& out) {
   static uint32_t seen = 0;
-  bool changed = false;
-  portENTER_CRITICAL(&s_shareMux);
-  if (s_share.seq != seen) {
-    out = s_share.model;
-    out.bridgeOnline = s_share.online;
-    seen = s_share.seq;
-    changed = true;
-  }
-  portEXIT_CRITICAL(&s_shareMux);
-  return changed;
+  const uint8_t idx = s_active;
+  const NetShare& slot = s_share[idx];
+  const uint32_t v0 = slot.version;
+  if (v0 == 0 || v0 == seen || idx != s_active) return false;
+
+  // 先拷到临时对象：万一写者此刻复用了这一块，放弃本轮、下一轮再取，
+  // 绝不把拷了一半的 model 写进 gModel。
+  DpModel tmp = slot.model;
+  const bool online = slot.online;
+  __sync_synchronize();
+  if (slot.version != v0 || idx != s_active) return false;
+
+  tmp.bridgeOnline = online;
+  out = tmp;
+  seen = v0;
+  return true;
 }

@@ -20,6 +20,7 @@ int s_gx = 0, s_gy = 0;
 bool s_bootDown = false;
 uint32_t s_bootDownAt = 0;
 bool s_bootLongFired = false;
+bool s_bootLongLatched = false;  // 长按已触发过：松开时不再补一个短按
 bool s_bootShortFired = false;
 bool s_userDown = false;
 uint32_t s_userDownAt = 0;
@@ -28,6 +29,26 @@ bool s_pwrDown = false;
 uint32_t s_pwrDownAt = 0;
 bool s_pwrFired = false;
 bool s_pwrArmed = true;
+
+// 机械按键的抖动会造出一串假边沿（短按变两次、长按被重置）。
+// 状态必须稳定 20ms 才认，够便宜也够用。
+struct Debounced {
+  bool stable = false;
+  bool raw = false;
+  uint32_t rawAt = 0;
+
+  bool poll(bool pressed, uint32_t now) {
+    if (pressed != raw) {
+      raw = pressed;
+      rawAt = now;
+    } else if (now - rawAt >= 20) {
+      stable = raw;
+    }
+    return stable;
+  }
+};
+
+Debounced s_bootDeb, s_userDeb, s_pwrDeb;
 
 struct TouchPoint {
   bool down;
@@ -96,22 +117,27 @@ void inputPoll() {
   }
 
   // BOOT 键
-  bool boot = digitalRead(BTN_BOOT) == LOW;
+  bool boot = s_bootDeb.poll(digitalRead(BTN_BOOT) == LOW, now);
   if (boot && !s_bootDown) {
     s_bootDown = true;
     s_bootDownAt = now;
     s_bootLongFired = false;
+    s_bootLongLatched = false;
   } else if (boot && s_bootDown) {
     if (!s_bootLongFired && now - s_bootDownAt > 5000) {
       s_bootLongFired = true;
+      s_bootLongLatched = true;
       s_bootShortFired = false;
     }
   } else if (!boot && s_bootDown) {
     s_bootDown = false;
-    if (!s_bootLongFired && now - s_bootDownAt > 60) s_bootShortFired = true;
+    // 用 latched 而不是 longFired：longFired 会被 inputTakeBootLong() 立刻取走清零，
+    // 那样松开时就会误判成短按，多排一次"切亮度"。
+    if (!s_bootLongLatched && now - s_bootDownAt > 60) s_bootShortFired = true;
+    s_bootLongLatched = false;
   }
 
-  bool user = digitalRead(BTN_USER) == LOW;
+  bool user = s_userDeb.poll(digitalRead(BTN_USER) == LOW, now);
   if (user && !s_userDown) {
     s_userDown = true;
     s_userDownAt = now;
@@ -123,7 +149,7 @@ void inputPoll() {
   // PWR 键：长按 1 秒触发一次"开机/关机"。armed 锁存保证一次按下只触发一次，
   // 松开重按才会再次触发——否则长按期间会反复翻转（像 BOOT 长按那样靠重启兜底，
   // 这里没有重启可兜，必须自己锁住）。
-  bool pwr = digitalRead(BTN_PWR) == LOW;
+  bool pwr = s_pwrDeb.poll(digitalRead(BTN_PWR) == LOW, now);
   if (pwr && !s_pwrDown) {
     s_pwrDown = true;
     s_pwrDownAt = now;

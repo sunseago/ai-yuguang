@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 #include "board_config.h"
 #include "canvas.h"
@@ -81,6 +83,34 @@ static void logLine(const char* buf, int len) {
   if (len > 0) Serial.write((const uint8_t*)buf, (size_t)len);
 }
 
+// 心跳是「多次 snprintf 拼一行」。直接累加返回值的写法有个坑：snprintf 返回的
+// 是"本来要写多长"，一旦超过缓冲区，后续 sizeof(buf) - n 会下溢成巨大的 size_t，
+// 格式化就失去了边界，末尾 logLine 还会按 n 越界读。这里统一收口：
+// 每次只在剩余空间里写，len 永远不超过 sizeof(buf)-1。
+struct LineBuf {
+  char buf[512];
+  size_t len = 0;
+
+  void addf(const char* fmt, ...) {
+    if (len + 1 >= sizeof(buf)) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + len, sizeof(buf) - len, fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    const size_t cap = sizeof(buf) - 1 - len;
+    len += ((size_t)n > cap) ? cap : (size_t)n;
+    buf[len] = '\0';
+  }
+
+  void newline() {
+    if (len + 1 < sizeof(buf)) {
+      buf[len++] = '\n';
+      buf[len] = '\0';
+    }
+  }
+};
+
 void setup() {
   // 电池供电时必须第一时间拉高电源保持脚，否则会掉电
   pinMode(BAT_EN, OUTPUT);
@@ -104,8 +134,9 @@ void setup() {
   Serial.printf("[dp] power=%s batt=%s\n", powerLabel(),
                 powerBatteryVoltage() < 0 ? "none" : "detected");
 
-  // 屏幕电源策略要在首帧渲染前就位，否则开机那一下亮度是未定义的
-  screenPowerInit();
+  // 屏幕电源策略要在首帧渲染前就位，否则开机那一下亮度是未定义的。
+  // 把初始亮度告诉它，心跳里的 br= 才不会在第一帧前误报 0。
+  screenPowerInit(kBrightSteps[gBrightIdx]);
   displayBrightness(kBrightSteps[gBrightIdx]);
 
   gImuOk = imuInit();
@@ -143,16 +174,20 @@ void setup() {
   } else {
     Serial.println("[dp] first fetch FAILED (bridge unreachable?)");
   }
-  netStartPolling();   // 网络从此在 core 0 的独立任务里跑
+  if (!netStartPolling()) {
+    // 任务没起来不能装作没事：界面会永远停在开机那一份快照上。
+    // 保留 UI 可用，同时在屏上/串口明确报错，避免"数据不动但看着像正常"。
+    Serial.println("[dp] ERROR: net task failed to start, state will be stale");
+  }
   render();
 }
 
 void loop() {
   inputPoll();
 
-  // 熄屏状态下这一下的触摸只用于唤醒，不能顺带翻页/点卡片 ——
+  // 熄屏（以及熄屏前的淡出）状态下这一下的触摸只用于唤醒，不能顺带翻页/点卡片 ——
   // 否则会出现"想叫醒屏幕，结果把页面滑走了"。
-  const bool screenWasOff = screenPowerIsOff();
+  const bool screenWasOff = screenPowerIsOff() || screenPowerIsFading();
   // 手动关机（PWR 长按）时连唤醒都不该有：只有再长按一次 PWR 才能开机。
   const bool manualOff = screenPowerIsManualOff();
 
@@ -174,42 +209,40 @@ void loop() {
   // 30s 一条心跳，方便长时间挂机时从串口判断状态
   if (now - gLastBeat > 30000) {
     gLastBeat = now;
-    static char beat[384];
-    int n = snprintf(beat, sizeof(beat),
-                     "[dp] t=%lus wifi=%d link=%d heap=%u psram_free=%u rot=%u imu=%s pwr=%s",
-                     (unsigned long)(now / 1000), (int)netOnline(), (int)gModel.bridgeOnline,
-                     (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(),
-                     (unsigned)displayRotation(), gImuOk ? "ok" : "--", powerLabel());
-    n += snprintf(beat + n, sizeof(beat) - n, " gap=%lums", (unsigned long)gMaxGap);
+    LineBuf hb;
+    hb.addf("[dp] t=%lus wifi=%d link=%d heap=%u psram_free=%u rot=%u imu=%s pwr=%s",
+            (unsigned long)(now / 1000), (int)netOnline(), (int)gModel.bridgeOnline,
+            (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(),
+            (unsigned)displayRotation(), gImuOk ? "ok" : "--", powerLabel());
+    hb.addf(" gap=%lums", (unsigned long)gMaxGap);
     gMaxGap = 0;
-    // 屏幕策略的现场：on/dim/off/manual + 电脑空闲秒数 + 亮多少。
+    // 屏幕策略的现场：on/dim/fade/off/manual + 电脑空闲秒数 + 亮多少。
     // 判断"为什么屏黑了"只看这一小段就够。manual = PWR 长按的手动关机。
-    n += snprintf(beat + n, sizeof(beat) - n, " scr=%s idle=%lds br=%u",
-                  screenPowerIsManualOff()
-                      ? "manual"
-                      : (screenPowerIsOff() ? "off" : (screenPowerIsDim() ? "dim" : "on")),
-                  (long)gModel.hostIdleS, (unsigned)screenPowerLevel());
+    const char* scr = screenPowerIsManualOff()
+                          ? "manual"
+                          : (screenPowerIsOff() ? "off"
+                             : (screenPowerIsFading() ? "fade"
+                                : (screenPowerIsDim() ? "dim" : "on")));
+    hb.addf(" scr=%s idle=%lds br=%u", scr, (long)gModel.hostIdleS,
+            (unsigned)screenPowerLevel());
     if (gImuOk) {
       float ax, ay, az, ip;
       imuLastSample(ax, ay, az, ip);
-      n += snprintf(beat + n, sizeof(beat) - n, " g=%.2f,%.2f,%.2f flat=%d", ax, ay, az,
-                    imuIsFlat() ? 1 : 0);
+      hb.addf(" g=%.2f,%.2f,%.2f flat=%d", ax, ay, az, imuIsFlat() ? 1 : 0);
     }
-    for (int i = 0; i < gModel.count && n < (int)sizeof(beat) - 1; i++) {
+    for (int i = 0; i < gModel.count && hb.len + 1 < sizeof(hb.buf); i++) {
       const DpProvider& p = gModel.items[i];
       // 连额度一起打，不看屏幕也能核对桥接数据对不对
       if (p.quotaKind == DP_Q_BALANCE) {
-        n += snprintf(beat + n, sizeof(beat) - n, " | %s:%s %.2f", p.id, dpStateLabel(p.state),
-                      p.remaining);
+        hb.addf(" | %s:%s %.2f", p.id, dpStateLabel(p.state), p.remaining);
       } else if (p.quotaKind == DP_Q_CREDIT) {
-        n += snprintf(beat + n, sizeof(beat) - n, " | %s:%s %.0f/%.0f", p.id,
-                      dpStateLabel(p.state), p.used, p.budget);
+        hb.addf(" | %s:%s %.0f/%.0f", p.id, dpStateLabel(p.state), p.used, p.budget);
       } else {
-        n += snprintf(beat + n, sizeof(beat) - n, " | %s:%s", p.id, dpStateLabel(p.state));
+        hb.addf(" | %s:%s", p.id, dpStateLabel(p.state));
       }
     }
-    if (n < (int)sizeof(beat) - 1) beat[n++] = '\n';
-    logLine(beat, n);
+    hb.newline();
+    logLine(hb.buf, (int)hb.len);
   }
 
   // ---- 触摸手势 ----

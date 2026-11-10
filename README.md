@@ -144,6 +144,11 @@ node deskpulse-bridge.mjs
 
 打开 <http://127.0.0.1:8787/v1/state> 应该能看到三家状态。
 
+**局域网鉴权（可选）**：桥接默认监听 `0.0.0.0`，同网段设备都能读到任务标题和用量。
+在 `config.json` 里设置 `"authToken": "你的令牌"` 后，`/v1/state` 与 `/v1/stream` 会要求
+`X-DP-Token` 头（或 `?token=`）；`/healthz` 保持开放，供菜单栏探活。
+设备端在配网页的「访问令牌」填同一个值即可；留空表示不鉴权（兼容旧固件）。
+
 **桥接是必须常驻的**：板子只是个哑显示终端，自己不读任何数据，每 2 秒 `GET /v1/state` 拉一次。
 桥接一停，板子还在跑（Wi-Fi、触摸、自动转屏都正常），但拿不到新数据。
 
@@ -506,8 +511,12 @@ cd /tmp && /tmp/preview && python3 <项目>/firmware/tools/ppm2png.py
 
 ```bash
 cd bridge
-node tests/approval.mjs      # WorkBuddy：配对 / 增量 / 半行 / 过期，10 项
-node tests/dsh-approval.mjs  # dsh：asked/decided 配对与过期，7 项
+node tests/approval.mjs       # WorkBuddy：配对 / 增量 / 半行 / 过期，10 项
+node tests/dsh-approval.mjs   # dsh：asked/decided 配对与过期，7 项
+node tests/dsh-incremental.mjs # dsh：增量解析 + 半帧补齐（需要本机有 dsh 会话）
+node tests/lib-units.mjs      # 配置深合并 / 额度文件裁剪 / zstd 只消费完整帧
+node tests/leveldb-scan.mjs   # Kimi 登录态：WAL 缺失时从 .ldb 扫 JWT 兜底
+node tests/contract.mjs       # 固件 ↔ 桥接字段契约（读本机真实数据）
 ```
 
 这是刻意设计的：`canvas.cpp` / `ui.cpp` 不依赖 Arduino，才能在电脑上编译。
@@ -526,7 +535,8 @@ g++ -O1 -I src -o /tmp/rot_test tools/test_rotation.cpp && /tmp/rot_test
 **看假数据**（不读真实文件，状态会自动轮转）：
 
 ```bash
-node src/deskpulse-bridge.mjs --mock
+cd bridge
+node deskpulse-bridge.mjs --mock
 ```
 
 **重生成中文字库**（想加字/换字型时）：
@@ -560,7 +570,7 @@ python3 tools/gen_font.py unifont.hex src/font_data.h
 | 板子显示 `NO LINK` | 桥接没在跑。`curl 127.0.0.1:8787/healthz` 探一下；电脑睡眠也会导致这个 |
 | `NO LINK` 时界面卡死、点击滑动丢、转屏要等很久 | 已修（0.1.2）。根因是 `http.GET()` 同步阻塞、超时 2.5 秒，而它原来跑在 `loop()` 里：主机**可达但不回应**（Mac 睡眠、Wi-Fi 半断）时，每 2 秒冻结界面 2.5 秒，触摸（边沿检测）和 IMU 轮询（200ms×5 次）全被饿死。现在网络搬进 core 0 的独立任务，UI 只读快照。自查只看心跳的 `gap=`：正常几十毫秒 |
 | 屏一直亮着，人不在电脑前也不变暗 | 桥接没送 `host.idle_s`。`curl -s 127.0.0.1:8787/v1/state \| python3 -m json.tool \| grep idle` 看一眼；-1 表示 `ioreg` 读不到，设备会当作「人在用」保守不熄 |
-| 只想让屏一直亮着 | `board_config.h` 把 `SCR_DIM_AFTER_HOST_IDLE_MS` 和 `SCR_OFF_AFTER_NOLINK_*` 都调大即可，或者直接把 `SCR_DIM_PERCENT` 改成 100 |
+| 只想让屏一直亮着 | `board_config.h` 把 `SCR_DIM_AFTER_IDLE_WALL_MS` / `SCR_DIM_AFTER_IDLE_BATT_MS` 和 `SCR_OFF_AFTER_NOLINK_MS` 都调大即可，或者直接把 `SCR_DIM_PERCENT` 改成 100 |
 | 熄屏后摸屏幕没反应 | 第一下是唤醒，只亮 10 秒不翻页；这 10 秒内再点才导航 |
 | `NO LINK` 时一直亮着不熄屏 | 0.1.4 已修。两个根因：①熄屏后 `screenWasOff` 每轮都在记输入，屏幕刚熄就被自己叫醒；②「从没连上过就一直亮」的保护误伤——板子插充电器/电脑关机后重上电，永远连不上桥接，于是永远亮着。配网门户其实在 `netBegin()` 里阻塞运行，根本不需要这条保护，已删除 |
 

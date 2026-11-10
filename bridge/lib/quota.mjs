@@ -3,17 +3,49 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+const KEEP_MS = 30 * 86400_000;
+const MAX_BYTES = 1024 * 1024;   // 超过 1MB 就重写一次，别让文件无限长
+
 export function createQuotaStore(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   let entries = [];
 
+  function fileSize() {
+    try {
+      return fs.statSync(file).size;
+    } catch {
+      return 0;
+    }
+  }
+
+  // 只保留 30 天，并原子重写（tmp → rename）。
+  // 旧实现只在内存里裁剪、文件只追加，跑几个月会变成几十 MB，
+  // 每次启动都要全量 parse。
+  function compact(force = false) {
+    const cutoff = Date.now() - KEEP_MS;
+    const kept = entries.filter((e) => e.t >= cutoff);
+    const needRewrite = force || kept.length !== entries.length || fileSize() > MAX_BYTES;
+    if (!needRewrite) return;
+    entries = kept;
+    try {
+      const tmp = `${file}.tmp`;
+      const body = entries.map((e) => JSON.stringify(e)).join('\n');
+      fs.writeFileSync(tmp, body ? body + '\n' : '');
+      fs.renameSync(tmp, file);
+    } catch {
+      // 重写失败不影响采样精度，最多是文件继续变大
+    }
+  }
+
   function load() {
     entries = [];
+    let total = 0;
     try {
       const raw = fs.readFileSync(file, 'utf8');
-      const cutoff = Date.now() - 30 * 86400_000;
+      const cutoff = Date.now() - KEEP_MS;
       for (const line of raw.split('\n')) {
         if (!line) continue;
+        total++;
         try {
           const e = JSON.parse(line);
           if (e.t >= cutoff) entries.push(e);
@@ -24,6 +56,9 @@ export function createQuotaStore(file) {
     } catch {
       /* 首次运行没有文件 */
     }
+    // 启动时顺手把过期行清掉（不用等文件涨到 1MB）
+    compact(total !== entries.length);
+    return total;
   }
   load();
 
@@ -38,6 +73,7 @@ export function createQuotaStore(file) {
     } catch {
       /* 写失败不影响主流程 */
     }
+    compact();
   }
 
   function seriesFor(id) {
@@ -69,5 +105,5 @@ export function createQuotaStore(file) {
     return spent / spanDays;
   }
 
-  return { load, append, spentToday, avgDaily, seriesFor, get size() { return entries.length; } };
+  return { load, append, spentToday, avgDaily, seriesFor, compact, get size() { return entries.length; } };
 }

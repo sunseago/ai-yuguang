@@ -1,7 +1,11 @@
-// 极简 LevelDB 读取器：只解析 Chromium 的 Local Storage WAL（*.log）。
-// 用途：Kimi 桌面版把登录态放在 localStorage 里，那是 LevelDB 存的，
-// 但值本身没有加密，只有 Electron safeStorage 那套（token-store.json）才是密文。
-// 所以这里只要把 log 里的 WriteBatch 拆出来，就能拿到 access_token / refresh_token。
+// 极简 LevelDB 读取器：解析 Chromium 的 Local Storage WAL（*.log），
+// 并在 WAL 里找不到令牌时，用「扫描 .ldb/.log 里的 JWT」兜底。
+//
+// 为什么需要兜底：Chromium 会把 WAL 压实成 .ldb，压实后 *.log 里就没有
+// access_token / refresh_token 了，Kimi 额度会静默变成"未找到登录态"。
+// 完整实现 SSTable（footer / block / snappy）成本高且容易随版本变化失效；
+// 而 JWT 是高熵数据，Snappy 基本压不动，LevelDB 往往原样存放在 data block 里
+// —— 所以直接扫明文更简单、更稳，只在 WAL 缺令牌时才用。
 //
 // 不引第三方依赖是 PRD 的硬约束，所以自己解。
 // 格式参考 leveldb/doc/log_format.md + WriteBatch 编码。
@@ -123,7 +127,7 @@ function decodeEntry(keyBuf, valBuf) {
 }
 
 /**
- * 读一个 Chromium Local Storage 目录，返回 Map<"origin\tkey", value>。
+ * 读一个 Chromium Local Storage 目录的 WAL，返回 Map<"origin\tkey", value>。
  * 后写入的覆盖先写入的，跟浏览器行为一致。
  */
 export function readLocalStorage(dir) {
@@ -168,4 +172,64 @@ export function decodeJwtPayload(token) {
   } catch {
     return null;
   }
+}
+
+const JWT_RE = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+const MAX_SCAN_BYTES = 32 * 1024 * 1024;
+
+/**
+ * 兜底：在 leveldb 目录的所有文件里扫 JWT，按 exp 区分 access / refresh。
+ *
+ * JWT 是高熵字符串，Snappy 压不动，LevelDB 通常原样存在 data block 里，
+ * 所以在 .ldb 中直接搜明文是可行的（实测 Kimi 的 .ldb 里能搜到完整 JWT）。
+ *
+ * @returns {{access: string|null, refresh: string|null, claims: object|null}}
+ */
+export function scanJwtTokens(dir) {
+  const now = Math.floor(Date.now() / 1000);
+  const candidates = new Map(); // token -> claims
+
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith('.ldb') || f.endsWith('.log') || f.endsWith('.sst'));
+  } catch {
+    return { access: null, refresh: null, claims: null };
+  }
+
+  for (const f of files) {
+    let buf;
+    try {
+      buf = fs.readFileSync(path.join(dir, f));
+    } catch {
+      continue;
+    }
+    if (buf.length > MAX_SCAN_BYTES) continue;
+    const text = buf.toString('latin1');
+    const found = text.match(JWT_RE) || [];
+    for (const tok of found) {
+      if (candidates.has(tok)) continue;
+      const claims = decodeJwtPayload(tok);
+      if (!claims || !claims.exp) continue;
+      candidates.set(tok, claims);
+    }
+  }
+
+  let refresh = null;
+  let access = null;
+  let refreshClaims = null;
+  for (const [tok, claims] of candidates) {
+    if (claims.exp < now) continue;  // 过期的不算
+    // access 只有十几分钟到几小时；refresh 是几十天。用 7 天做分界。
+    const isRefresh = claims.exp - now > 7 * 86400;
+    if (isRefresh) {
+      if (!refreshClaims || claims.exp > refreshClaims.exp) {
+        refresh = tok;
+        refreshClaims = claims;
+      }
+    } else if (!access || claims.exp > (decodeJwtPayload(access)?.exp || 0)) {
+      access = tok;
+    }
+  }
+
+  return { access, refresh, claims: refreshClaims };
 }

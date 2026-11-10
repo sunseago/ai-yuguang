@@ -61,8 +61,7 @@ function sumCredits(handle, sinceMs) {
          FROM session_usage u
          JOIN sessions s ON s.id = u.session_id
         WHERE u.credit_json IS NOT NULL
-          AND COALESCE(s.last_activity_at, s.updated_at) >= ?
-        LIMIT 500`
+          AND COALESCE(s.last_activity_at, s.updated_at) >= ?`
     )
     .all(sinceMs);
   let total = 0;
@@ -95,6 +94,10 @@ export function readWorkBuddy(cfg, opts) {
 
   try {
     const handle = open(cfg);
+    // 审批检测放在最前面：即使库里一条会话都没有（刚清空历史/换账号），
+    // 也不能漏掉此刻正在等的弹框 —— 旧实现会在这里提前 return 跳过检测。
+    const appr = approvals.poll(cfg, opts?.awaitExpireMs ?? 300000);
+
     const row = handle
       .prepare(
         `SELECT s.id, COALESCE(NULLIF(s.custom_title, ''), s.title) AS title,
@@ -108,7 +111,8 @@ export function readWorkBuddy(cfg, opts) {
       .get();
 
     if (!row) {
-      provider.state = 'idle';
+      provider.state = appr ? 'awaiting' : 'idle';
+      if (appr) provider.state_since = appr.at;
       provider.health = 'ok';
       return provider;
     }
@@ -146,7 +150,6 @@ export function readWorkBuddy(cfg, opts) {
 
     // 有弹框在等你 → 覆盖会话状态。这是当下最紧急的事实：
     // 会话可能还写着 working，其实它早就卡在等人点「允许」了。
-    const appr = approvals.poll(cfg, opts?.awaitExpireMs ?? 300000);
     if (appr) {
       provider.state = 'awaiting';
       provider.state_since = appr.at;

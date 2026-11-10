@@ -9,10 +9,21 @@
 // 刻意做成异步 + 5 秒缓存：/v1/state 每 2 秒被拉一次，同步 fork 一个进程会在
 // 事件循环里留下 10ms 的空档。异步刷新后，这个请求永远不会因为探测而变慢。
 import { execFile } from 'node:child_process';
+import { log } from './util.mjs';
 
 const TTL_MS = 5000;
 
 const cache = { at: 0, s: -1, pending: false };
+let lastWarnAt = 0;
+
+// 读不到时不要静默：这是「屏为什么不变暗」最常见的原因，
+// 但每分钟最多报一次，别把日志刷满。
+function warnOnce(msg) {
+  const now = Date.now();
+  if (now - lastWarnAt < 60000) return;
+  lastWarnAt = now;
+  log('host idle:', msg);
+}
 
 /**
  * 触发一次后台刷新（到 TTL 才会真的执行）。
@@ -30,10 +41,16 @@ export function refreshHostIdle() {
     if (err) {
       // 读不到就退回 -1（未知）。设备侧把 -1 当作"在用"，宁可亮着也不要误熄。
       cache.s = -1;
+      warnOnce(`ioreg 执行失败（${err.message}），按"人在用"处理`);
       return;
     }
     const m = String(stdout).match(/"HIDIdleTime"\s*=\s*(\d+)/);
-    cache.s = m ? Math.round(Number(m[1]) / 1e9) : -1;
+    if (!m) {
+      cache.s = -1;
+      warnOnce('ioreg 输出里没有 HIDIdleTime，按"人在用"处理');
+      return;
+    }
+    cache.s = Math.round(Number(m[1]) / 1e9);
   });
 }
 

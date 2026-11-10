@@ -16,13 +16,18 @@ cd "$(dirname "$0")"
 APP_TITLE="AI余光"               # 显示名 = .app 文件名（全名，别简写成「余光」）
 APP_NAME="yuguang"               # 包内可执行文件名（ASCII）
 BUNDLE_ID="cn.deskpulse.app"
-VERSION="0.1.4"
 ROOT="$(cd .. && pwd)"          # deskpulse/
 DIST="$(pwd)/dist"
 APP="$DIST/$APP_TITLE.app"
 EXE="$APP/Contents/MacOS/$APP_NAME"
 
 NODE_BIN="${NODE_BIN:-$HOME/.workbuddy/binaries/node/versions/22.22.2-6/bin/node}"
+[[ -x "$NODE_BIN" ]] || { echo "找不到可用的 node: $NODE_BIN"; echo "用 NODE_BIN=/path/to/node $0 指定"; exit 1; }
+
+# 版本号唯一来源是 bridge/version.json（固件生成、桥接运行时、Info.plist 都读它）
+VERSION="$("$NODE_BIN" -p "require('$ROOT/bridge/version.json').version" 2>/dev/null || true)"
+[[ -n "$VERSION" ]] || { echo "读不到 $ROOT/bridge/version.json 里的 version"; exit 1; }
+echo "==> 版本 $VERSION"
 
 # 删除辅助：正常环境直接删；某些受限环境（比如被沙箱接管）删不掉就移走，
 # 免得 set -e 把整个构建打断。
@@ -42,7 +47,6 @@ for a in "$@"; do
   esac
 done
 
-[[ -x "$NODE_BIN" ]] || { echo "找不到可用的 node: $NODE_BIN"; echo "用 NODE_BIN=/path/to/node $0 指定"; exit 1; }
 command -v swiftc >/dev/null || { echo "缺 Swift 工具链：xcode-select --install"; exit 1; }
 
 echo "==> 准备目录"
@@ -89,6 +93,9 @@ else
 fi
 cp "$ROOT/bridge/deskpulse-bridge.mjs" "$APP/Contents/Resources/bridge/"
 cp "$ROOT/bridge/config.json" "$APP/Contents/Resources/bridge/"
+# 桥接运行时从 version.json 读版本号，必须一起打包
+cp "$ROOT/bridge/version.json" "$APP/Contents/Resources/bridge/"
+cp "$ROOT/bridge/version.mjs" "$APP/Contents/Resources/bridge/"
 cp -R "$ROOT/bridge/adapters" "$APP/Contents/Resources/bridge/"
 cp -R "$ROOT/bridge/lib" "$APP/Contents/Resources/bridge/"
 # 不带 tests / data / install-launchd.sh —— 包里不需要，data 会在用户目录重建

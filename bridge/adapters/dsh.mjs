@@ -82,9 +82,17 @@ function textOfMessage(data) {
   return '';
 }
 
+// 事件时间的防御性归一化：真实日志里 time 可能是毫秒数、秒数，甚至 ISO 字符串。
+// 直接 Number() 会得到 NaN，进而让 state_since 变成 null、awaiting 永不过期。
+function eventTime(ev) {
+  const n = Number(ev.time);
+  if (!Number.isFinite(n)) return Date.now();
+  return n < 1e12 ? n * 1000 : n;  // 秒级时间戳换算成毫秒
+}
+
 function apply(st, ev) {
   const t = ev.type;
-  const time = Number(ev.time || Date.now());
+  const time = eventTime(ev);
   const d = ev.data || {};
   switch (t) {
     case 'user/message':
@@ -193,39 +201,47 @@ export function readDsh(cfg, opts) {
       cache.file = file;
       cache.consumedBytes = 0;
       cache.state = emptyState(file);
-      cache.size = -1;
     }
 
-    if (st0.size !== cache.size) {
+    if (st0.size > cache.consumedBytes) {
       const compressed = file.endsWith('.zstd');
-      // consumedBytes 始终停在帧边界上，所以直接从它开始读，不需要回退（回退会重复解析）
-      const start = compressed ? cache.consumedBytes : 0;
+      // consumedBytes 始终停在「已确认消费」的边界上，所以直接从它开始读
+      const start = cache.consumedBytes;
       const len = st0.size - start;
-      if (len > 0) {
-        const fd = fs.openSync(file, 'r');
-        let buf;
-        try {
-          buf = Buffer.alloc(len);
-          fs.readSync(fd, buf, 0, len, start);
-        } finally {
-          fs.closeSync(fd);
-        }
+      const fd = fs.openSync(file, 'r');
+      let buf;
+      try {
+        buf = Buffer.alloc(len);
+        fs.readSync(fd, buf, 0, len, start);
+      } finally {
+        fs.closeSync(fd);
+      }
 
-        if (compressed) {
-          // 关键：Node 的 zstd 对「被截断的帧」不报错，会静默返回部分内容。
-          // 因此用 JSONL 的行边界做完整性判据：解出来的文本必须以换行结尾，
-          // 否则说明最后一帧还在写，本轮不消费，下轮从同一帧边界重试。
-          const { text, frames } = decompressFrames(buf);
-          const settled = text.endsWith('\n') || Date.now() - st0.mtimeMs > 30000;
-          if (frames > 0 && settled) {
-            parseChunk(cache.state, text);
-            cache.consumedBytes = st0.size;
-            cache.size = st0.size;
-          }
-        } else {
+      // 文件已经 30 秒没动 → 认为写入方不会再补齐最后一帧
+      const stale = Date.now() - st0.mtimeMs > 30000;
+
+      if (compressed) {
+        // decompressFrames 只把「完整帧」算进 consumed，写到一半的帧会留在原地。
+        // 这里必须按 consumed 推进 offset；旧实现无条件推到最后，半帧那批事件
+        // 就被永久跳过了（审批/问答事件恰好可能落在那半帧里）。
+        const { text, consumed, tail } = decompressFrames(buf, { allowTail: stale });
+        if (consumed > 0) {
+          parseChunk(cache.state, text);
+          cache.consumedBytes = start + consumed;
+        } else if (tail && stale) {
+          // 半帧放了很久也没补齐，文件大概率写坏了：跳过它，别让后续帧永远读不到
+          cache.consumedBytes = st0.size;
+        }
+      } else {
+        // 未压缩日志：按最后一个换行增量消费。旧实现每次都从 0 重放整个文件，
+        // 长会话下是 O(n²)，而且每 2 秒都要重新解析一遍全部事件。
+        const nl = buf.lastIndexOf(0x0a);
+        if (nl >= 0) {
+          parseChunk(cache.state, buf.toString('utf8', 0, nl));
+          cache.consumedBytes = start + nl + 1;
+        } else if (stale && len > 0) {
           parseChunk(cache.state, buf.toString('utf8'));
           cache.consumedBytes = st0.size;
-          cache.size = st0.size;
         }
       }
       cache.mtime = st0.mtimeMs;

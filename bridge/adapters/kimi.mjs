@@ -73,13 +73,25 @@ export async function refreshKimiQuota(cfg = {}, store) {
   }
 }
 
+// pgrep 结果缓存 5 秒：设备每 2 秒拉一次 /v1/state，加上 App 探针，
+// 不缓存等于每两秒 fork 好几次进程，纯浪费。进程是否存活不需要秒级精度。
+const aliveCache = { at: 0, value: false, pending: null };
+
 function processAlive(pattern) {
-  return new Promise((resolve) => {
+  const now = Date.now();
+  if (now - aliveCache.at < 5000) return Promise.resolve(aliveCache.value);
+  if (aliveCache.pending) return aliveCache.pending;
+
+  aliveCache.at = now;  // 先占位，避免并发请求各起一个 pgrep
+  aliveCache.pending = new Promise((resolve) => {
     execFile('pgrep', ['-f', pattern], { timeout: 2000 }, (err, stdout) => {
-      if (err) return resolve(false);
-      resolve(String(stdout).trim().length > 0);
+      aliveCache.value = !err && String(stdout).trim().length > 0;
+      aliveCache.at = Date.now();
+      aliveCache.pending = null;
+      resolve(aliveCache.value);
     });
   });
+  return aliveCache.pending;
 }
 
 const ACTIVE_STATES = new Set(['running', 'working', 'in_progress', 'thinking', 'streaming']);

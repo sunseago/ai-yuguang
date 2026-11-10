@@ -15,7 +15,8 @@
 
 #include "model.h"
 
-void screenPowerInit();
+// initialPercent 是启动时实际下发的亮度，让内部缓存与硬件一致
+void screenPowerInit(uint8_t initialPercent = 100);
 
 // 有触摸/按键时调用。熄屏状态下这一下只负责唤醒，不当作翻页/点卡片。
 void screenPowerNoteInput();
@@ -34,6 +35,9 @@ bool screenPowerIsManualOff();
 
 // 当前是否处于"电脑在但人走开"的暗档（给心跳日志用）
 bool screenPowerIsDim();
+
+// 熄屏前的淡出态；这一段的触摸也只该唤醒、不该导航
+bool screenPowerIsFading();
 
 // 当前实际下发的背光百分比（0 表示已熄屏）
 uint8_t screenPowerLevel();

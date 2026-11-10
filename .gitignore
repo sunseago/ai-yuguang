@@ -5,6 +5,8 @@ config.local.json
 *.log
 
 # ---- 构建产物 ----
+# 版本头文件由 firmware/tools/gen_version.py 从 bridge/version.json 生成
+firmware/src/version_gen.h
 # PlatformIO 的依赖与中间产物（含 100MB+ 的 .a 和 .o）
 firmware/.pio/
 # 合并好的固件镜像（走 GitHub Release 分发）

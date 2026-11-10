@@ -15,7 +15,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const RESOLVED_SUFFIXES = ['.approved', '.rejected', '.denied'];
+// 除了批准/拒绝，取消、超时、过期、中止也都意味着「不用再等了」。
+// 少列一种，那张卡片就会白闪到 awaitExpireMs（默认 5 分钟）才消失。
+const RESOLVED_SUFFIXES = [
+  '.approved',
+  '.rejected',
+  '.denied',
+  '.cancelled',
+  '.canceled',
+  '.timeout',
+  '.timed-out',
+  '.timed_out',
+  '.expired',
+  '.aborted',
+];
 
 function dayKey(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(

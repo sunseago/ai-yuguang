@@ -41,14 +41,15 @@ void applyLevel(uint8_t pct) {
 
 }  // namespace
 
-void screenPowerInit() {
+void screenPowerInit(uint8_t initialPercent) {
   s_mode = SCR_ON;
   s_modeAt = millis();
   s_lastInput = millis();
   s_lastLinkOk = millis();
   s_linkOkPrev = false;
   s_manualOff = false;
-  s_level = 255;
+  // 与 setup 里 displayBrightness(initialPercent) 对齐，避免首帧前 br=0 的误报
+  s_level = initialPercent > SCR_MAX_LEVEL ? SCR_MAX_LEVEL : initialPercent;
 }
 
 void screenPowerNoteInput() { s_lastInput = millis(); }
@@ -64,14 +65,16 @@ void screenPowerToggleManualOff() {
     s_lastInput = millis();
     s_mode = SCR_ON;
     s_modeAt = millis();
-    s_level = 255;  // 强制下一轮重写亮度
+    // 关机时 s_level 已被写成 0，下一轮 update 会自然把基础亮度写回去，
+    // 不需要再用 255 这种"未下发"哨兵（那会让心跳短暂报出 br=255）。
   }
 }
 
 bool screenPowerIsOff() { return s_mode == SCR_OFF; }
 bool screenPowerIsManualOff() { return s_manualOff; }
 bool screenPowerIsDim() { return s_mode == SCR_DIM; }
-uint8_t screenPowerLevel() { return s_level == 255 ? 0 : s_level; }
+bool screenPowerIsFading() { return s_mode == SCR_FADE; }
+uint8_t screenPowerLevel() { return s_level; }
 
 void screenPowerUpdate(const DpModel& m, bool linkOk, bool onBattery, uint8_t basePercent) {
   const uint32_t now = millis();
@@ -97,7 +100,9 @@ void screenPowerUpdate(const DpModel& m, bool linkOk, bool onBattery, uint8_t ba
   ScrIn in;
   in.linkOk = linkOk;
   in.onBattery = onBattery;
-  in.hostIdleS = m.hostIdleS;
+  // 断链时 hostIdleS 是上一次成功拉取留下的旧值，不能再拿它判"人走开了"。
+  // 统一当作未知（-1 = 人在用），熄屏交给 linkLost 单独裁决。
+  in.hostIdleS = linkOk ? m.hostIdleS : -1;
   in.linkAgeMs = now - s_lastLinkOk;
   in.sinceInputMs = now - s_lastInput;
   in.modeAgeMs = now - s_modeAt;

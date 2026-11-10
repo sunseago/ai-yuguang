@@ -1,5 +1,7 @@
 // --mock：不读真实数据，产出一份随时间变化的假状态，
 // 用于固件开发时验证三种卡片布局、状态色和断连恢复。
+import { BRIDGE_VERSION } from '../version.mjs';
+
 export function mockState(startedAt) {
   const t = Date.now();
   const phase = Math.floor((t / 6000) % 4);
@@ -38,7 +40,13 @@ export function mockState(startedAt) {
 
   return {
     ts: t,
-    bridge: { ver: '0.1.4', uptime_s: Math.round((t - startedAt) / 1000), host: 'mock' },
+    bridge: {
+      ver: BRIDGE_VERSION,
+      uptime_s: Math.round((t - startedAt) / 1000),
+      host: 'mock',
+      localTime: new Date(t).toTimeString().slice(0, 5),
+    },
+    host: { idle_s: 0 },
     providers,
   };
 }

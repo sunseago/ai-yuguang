@@ -1,6 +1,7 @@
 {
   "port": 8787,
   "bind": "0.0.0.0",
+  "authToken": "",
   "intervalMs": 2000,
   "quotaIntervalMs": 60000,
   "idleAfterMs": 300000,

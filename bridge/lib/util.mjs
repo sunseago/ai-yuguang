@@ -18,14 +18,22 @@ export function readJson(p, fallback = null) {
 }
 
 export function pickConfig(baseDir) {
-  const base = readJson(path.join(baseDir, 'config.json'), {});
+  const baseRaw = readJson(path.join(baseDir, 'config.json'), {});
+  const base = baseRaw && typeof baseRaw === 'object' ? baseRaw : {};
   const local = readJson(path.join(baseDir, 'config.local.json'), null);
-  if (!local) return base;
-  return {
-    ...base,
-    ...local,
-    providers: { ...(base.providers || {}), ...(local.providers || {}) },
-  };
+  if (!local || typeof local !== 'object') return base;
+
+  // providers 下面每个 provider 也要逐字段合并：local 里只写 budgetCredits
+  // 时，不能把 base 的 dbPath / sessionsDir 整个丢掉（旧版是整体覆盖）。
+  const providers = {};
+  const keys = new Set([
+    ...Object.keys(base.providers || {}),
+    ...Object.keys(local.providers || {}),
+  ]);
+  for (const k of keys) {
+    providers[k] = { ...(base.providers?.[k] || {}), ...(local.providers?.[k] || {}) };
+  }
+  return { ...base, ...local, providers };
 }
 
 export function secretOf(providerCfg, envName) {
@@ -57,5 +65,6 @@ export function humanDuration(ms) {
 
 export function log(...args) {
   const ts = new Date().toISOString().slice(11, 19);
-  console.log(`[${ts}]`, ...args);
+  // 走 stderr：--once 会把 JSON 打到 stdout，日志混进去会让调用方解析失败
+  console.error(`[${ts}]`, ...args);
 }
