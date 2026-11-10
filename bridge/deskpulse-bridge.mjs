@@ -12,6 +12,7 @@ import { pickConfig, log } from './lib/util.mjs';
 import { createQuotaStore } from './lib/quota.mjs';
 import { hostIdleSeconds } from './lib/host-idle.mjs';
 import { refreshDeepSeekQuota, deepSeekQuota } from './lib/deepseek-balance.mjs';
+import { refreshWorkBuddyCredits } from './lib/workbuddy-credits.mjs';
 import { readWorkBuddy } from './adapters/workbuddy.mjs';
 import { readDsh } from './adapters/dsh.mjs';
 import { refreshKimiQuota, readKimi } from './adapters/kimi.mjs';
@@ -98,9 +99,12 @@ function healthOf(p, pcfg) {
     return 'ok';
   }
   if (p.quota?.kind === 'credit') {
-    const used = Number(p.quota.used || 0);
-    const budget = Number(p.quota.budget || 1);
-    const left = budget > 0 ? 1 - used / budget : 1;
+    const budget = Number(p.quota.budget || 0);
+    const remain = Number(p.quota.remaining);
+    // 有真实余额就按余额占比判；老路径（只有 used/budget）退回按消耗算
+    const left = budget > 0
+      ? (Number.isFinite(remain) ? remain / budget : 1 - Number(p.quota.used || 0) / budget)
+      : 1;
     if (left <= 0.05) return 'critical';
     if (left <= 0.2) return 'warn';
     return 'ok';
@@ -369,6 +373,10 @@ async function slowLoop() {
   slowRunning = true;
   const pc = cfg.providers || {};
   try {
+    // WorkBuddy 的余额要借客户端运行时取（约 1–2s，内部有 5 分钟 TTL）
+    if (pc.workbuddy?.enabled !== false && pc.workbuddy?.creditsFromClient !== false) {
+      await refreshWorkBuddyCredits();
+    }
     if (pc.deepseek?.enabled !== false) await refreshDeepSeekQuota(pc.deepseek || {}, store);
     if (pc.kimi?.enabled !== false) await refreshKimiQuota(pc.kimi || {}, store);
   } catch (e) {

@@ -98,6 +98,8 @@ cp "$ROOT/bridge/version.json" "$APP/Contents/Resources/bridge/"
 cp "$ROOT/bridge/version.mjs" "$APP/Contents/Resources/bridge/"
 cp -R "$ROOT/bridge/adapters" "$APP/Contents/Resources/bridge/"
 cp -R "$ROOT/bridge/lib" "$APP/Contents/Resources/bridge/"
+# WorkBuddy 真实余额要靠它借客户端运行时取数（bridge/lib/workbuddy-credits.mjs 调用）
+cp -R "$ROOT/bridge/tools" "$APP/Contents/Resources/bridge/"
 # 不带 tests / data / install-launchd.sh —— 包里不需要，data 会在用户目录重建
 
 echo "==> 签名（ad-hoc）"

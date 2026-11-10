@@ -12,6 +12,7 @@
     "workbuddy": {
       "enabled": true,
       "dbPath": "~/.workbuddy/workbuddy.db",
+      "creditsFromClient": true,
       "budgetCredits": 100,
       "budgetPeriod": "month"
     },

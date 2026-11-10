@@ -425,9 +425,14 @@ g++ -std=c++17 -O1 -I src -o /tmp/scr tools/test_screenlogic.cpp && /tmp/scr   #
 
 | 供应商 | 进度 | 额度 | 精度说明 |
 | --- | --- | --- | --- |
-| WorkBuddy | `~/.workbuddy/workbuddy.db` 的 `sessions.status` + `session_usage` | 本地累计 credit ÷ 你设的预算 | 官方没有余额接口，**这个数字是自建口径**，可在 `config.json` 里改 `budgetCredits` |
+| WorkBuddy | `~/.workbuddy/workbuddy.db` 的 `sessions.status` + `session_usage` | **官方剩余积分**（`/billing/meter/get-user-resource-summary`，与客户端顶部一致） | 客户端把 token 存成 at-rest 信封，桥接借 WorkBuddy 自带 Electron 运行时解密并代发请求（`bridge/tools/wb-oracle`），每 5 分钟取一次；取不到时退回「预算 − 本地已用」估算（`quota.source` 会标 `local-estimate`） |
 | DeepSeek Harness | `~/.dsh/sessions/*/session-*.jsonl.zstd` 事件流（turn/step/tool/job） | Platform 钱包余额（充值 + 赠送） | 进度精确；余额读 `~/.dsh/.credentials.yaml` 的登录态，**无需 API Key**，和桌面端显示同一个数 |
 | Kimi | 进程存活 + `kimi-agent/` 的会话状态与上下文占用 | 每日「深度研究 / 图像生成」剩余次数 | **进度是估算**（桌面端没有明文会话日志）；额度读桌面版本地登录态，**无需 API Key** |
+
+> WorkBuddy 卡片的数字是**剩余积分**（如 `2012 left`，详细页是 `2012/3229`），
+> 进度条也是余额占比。取数依赖本机 WorkBuddy 客户端已登录；不想要这条链路
+> （或客户端升级导致失效）时，把 `config.json` 里 `workbuddy.creditsFromClient`
+> 设成 `false`，会退回「预算 − 本地已用」的估算。
 
 > 为什么 Kimi 显示 `0/50` 而不是 ¥：Kimi 是订阅制，会员没有可花的余额，
 > 它的「剩余额度」就是每天的研究次数（默认 50）和图像次数（20）。
@@ -516,6 +521,7 @@ node tests/dsh-approval.mjs   # dsh：asked/decided 配对与过期，7 项
 node tests/dsh-incremental.mjs # dsh：增量解析 + 半帧补齐（需要本机有 dsh 会话）
 node tests/lib-units.mjs      # 配置深合并 / 额度文件裁剪 / zstd 只消费完整帧
 node tests/leveldb-scan.mjs   # Kimi 登录态：WAL 缺失时从 .ldb 扫 JWT 兜底
+node tests/workbuddy-credits.mjs # WorkBuddy 真实余额：解析 / 缓存 / 失败回退
 node tests/contract.mjs       # 固件 ↔ 桥接字段契约（读本机真实数据）
 ```
 
@@ -666,7 +672,8 @@ Kimi 的 `0/50` 来自桌面版每日额度，两者都没有配置任何 Key。
 - 长时间挂机尚未做 48 小时老化；目前 30 秒心跳观察堆内存无增长趋势。
 - Kimi 的任务进度只能到「会话是否在进行」，做不到「第几步」；
   上下文占用（`context.used/size`）已解析进模型但还没画到屏上。
-- WorkBuddy 的额度是预算口径，与官方账单可能有偏差。
+- WorkBuddy 的积分余额依赖客户端内部实现（at-rest 信封 + 原生绑定）。大版本升级后
+  可能失效；失效时 `quota.source` 会变成 `local-estimate`，并在 `quota.error` 里带上原因。
 - DeepSeek / Kimi 的本地读数依赖两个 app 在本机登录过；
   换机器或退出登录后需要重新登录一次。
 - 自动转屏只有 4 个直角档位，没有做任意角度的连续旋转（这块屏是方屏，做连续旋转反而

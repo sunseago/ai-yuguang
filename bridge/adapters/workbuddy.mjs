@@ -2,6 +2,7 @@
 // 注意：官方没有「剩余额度」接口，这里的额度口径是「本期已用 credit / 用户设定预算」。
 import { DatabaseSync } from 'node:sqlite';
 import { createApprovalWatcher } from '../lib/approval.mjs';
+import { workBuddyCredits, workBuddyCreditsError } from '../lib/workbuddy-credits.mjs';
 import { expandHome, truncateChars } from '../lib/util.mjs';
 
 let db = null;
@@ -146,7 +147,31 @@ export function readWorkBuddy(cfg, opts) {
     provider.context = { used, size };
 
     const since = periodStart(cfg.budgetPeriod || 'month');
-    provider.quota.used = Math.round(sumCredits(handle, since) * 100) / 100;
+    const localUsed = Math.round(sumCredits(handle, since) * 100) / 100;
+
+    // 额度口径：优先用客户端真实余额（billing 接口，与 App 顶部「剩余积分」一致）；
+    // 拿不到（WorkBuddy 没开 / 接口变了）才退回「预算 − 本地已用」的估算。
+    const credits = cfg.creditsFromClient === false ? null : workBuddyCredits();
+    if (credits && Number.isFinite(credits.total)) {
+      const capacity = credits.capacity > 0 ? credits.capacity : Number(cfg.budgetCredits ?? 100);
+      provider.quota = {
+        kind: 'credit',
+        remaining: Math.round(credits.total * 100) / 100,
+        budget: Math.round(capacity * 100) / 100,
+        used: Math.round((credits.used || 0) * 100) / 100,
+        unit: 'credit',
+        source: 'billing',
+        age_s: Math.round((Date.now() - credits.at) / 1000),
+        groups: credits.groups,
+      };
+    } else {
+      const budget = Number(cfg.budgetCredits ?? 100);
+      provider.quota.used = localUsed;
+      provider.quota.remaining = Math.round(Math.max(0, budget - localUsed) * 100) / 100;
+      provider.quota.source = 'local-estimate';
+      const err = workBuddyCreditsError();
+      if (err) provider.quota.error = err;
+    }
 
     // 有弹框在等你 → 覆盖会话状态。这是当下最紧急的事实：
     // 会话可能还写着 working，其实它早就卡在等人点「允许」了。

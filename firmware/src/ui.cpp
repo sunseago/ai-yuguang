@@ -135,11 +135,13 @@ void quotaLine(const DpProvider& p, char* prefix, size_t prefixN, char* big, siz
     if (p.remaining < 0) snprintf(big, bigN, "--");
     else snprintf(big, bigN, "%.2f", p.remaining);
   } else if (p.quotaKind == DP_Q_CREDIT) {
-    char used[12], budget[12];
-    fmtMoney(used, sizeof(used), p.used);
-    fmtMoney(budget, sizeof(budget), p.budget);
-    snprintf(big, bigN, "%s", used);
-    snprintf(small, smallN, "/%s", budget);
+    // 优先显示真实剩余积分（桥接从 billing 接口拿的）；
+    // 老桥接没有 remaining 时退回"已用/预算"，至少不显示空白。
+    char val[12], total[12];
+    fmtMoney(val, sizeof(val), p.remaining >= 0 ? p.remaining : p.used);
+    fmtMoney(total, sizeof(total), p.budget);
+    snprintf(big, bigN, "%s", val);
+    snprintf(small, smallN, "/%s", total);
   }
 }
 
@@ -165,6 +167,11 @@ void drawCard(Canvas& c, const DpProvider& p, int y, bool highlight, uint64_t no
 
   char prefix[8], big[16], small[12];
   quotaLine(p, prefix, sizeof(prefix), big, sizeof(big), small, sizeof(small));
+  // 卡片上把 "/总额" 换成 "left"：一眼看出这是余额而不是用量。
+  // 详细页仍保留 "/总额" 的口径。
+  if (p.quotaKind == DP_Q_CREDIT && p.remaining >= 0) {
+    snprintf(small, sizeof(small), "left");
+  }
   const int rightEdge = kCardX + kCardW - 9;
   int pw = c.textWidth(prefix, 1);
   int sw = c.textWidth(small, 1);
@@ -199,7 +206,10 @@ void drawCard(Canvas& c, const DpProvider& p, int y, bool highlight, uint64_t no
   float frac = 0;
   uint16_t barColor = healthColor(p.health);
   if (p.quotaKind == DP_Q_CREDIT && p.budget > 0) {
-    frac = p.used / p.budget;
+    // 进度条也改成"余额占比"：满格=充裕，短格=快用完，和右侧数字同向
+    frac = (p.remaining >= 0 ? p.remaining : p.budget - p.used) / p.budget;
+    if (frac < 0) frac = 0;
+    if (frac > 1) frac = 1;
   } else if (p.hasCtx && p.ctxSize > 0) {
     frac = (float)p.ctxUsed / (float)p.ctxSize;
     barColor = frac > 0.9f ? dpcolor::ERR : (frac > 0.75f ? dpcolor::WAIT : dpcolor::THINK);

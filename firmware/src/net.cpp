@@ -342,6 +342,8 @@ bool netFetch(DpModel& m) {
       d.quotaKind = DP_Q_CREDIT;
       d.used = q["used"] | 0.0f;
       d.budget = q["budget"].as<float>();
+      // 真实剩余积分；旧桥接没有这个字段时给 -1，UI 退回显示"已用/预算"
+      d.remaining = q["remaining"] | -1.0f;
       d.hasQuota = true;
     }
 
