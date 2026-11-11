@@ -4,6 +4,30 @@
 
 #include "board_config.h"
 
+// ---- 两块板共用的电压 -> 电量曲线 ----
+// 单节锂电的粗略曲线，够用来显示百分比。
+// 不用 PMIC 自带的电量计：AXP2101 的 0xA4 需要先使能并经过学习周期，
+// 出厂状态下读出来恒为 0（界面就会一直显示 0%）。
+namespace {
+int8_t voltageToPercent(float v) {
+  if (v < 0) return -1;
+  static const float kCurve[][2] = {
+      {3.30f, 0},  {3.50f, 12}, {3.65f, 30}, {3.75f, 50},
+      {3.85f, 68}, {3.95f, 82}, {4.05f, 92}, {4.20f, 100},
+  };
+  const int n = sizeof(kCurve) / sizeof(kCurve[0]);
+  if (v <= kCurve[0][0]) return 0;
+  if (v >= kCurve[n - 1][0]) return 100;
+  for (int i = 1; i < n; i++) {
+    if (v <= kCurve[i][0]) {
+      const float t = (v - kCurve[i - 1][0]) / (kCurve[i][0] - kCurve[i - 1][0]);
+      return (int8_t)(kCurve[i - 1][1] + t * (kCurve[i][1] - kCurve[i - 1][1]));
+    }
+  }
+  return 100;
+}
+}  // namespace
+
 #if defined(BOARD_AMOLED216)
 // ---------------- AMOLED 2.16：AXP2101 ----------------
 // 这块板没有 BAT_EN 保持脚，也没有电池分压 ADC：电压、充电状态都从 PMIC 读。
@@ -27,6 +51,13 @@ void powerInit() {
     Serial.println("[dp] pmu=FAILED (AXP2101 not found)");
     return;
   }
+
+  // 只开 ADC 采样通道（用来读电池/VBUS 电压），不碰任何电源轨使能。
+  // 不开这两个的话 getBattVoltage() 读到 0，界面会错误显示 "USB 0%"。
+  // 这两句写的是 ADC 通道控制寄存器，即便某次读失败也只会影响温度/系统电压的
+  // 采样，不会像 enableALDO/BLDO 那样（同一寄存器里混着电源轨使能位）连带熄轨。
+  s_pmu.enableBattVoltageMeasure();
+  s_pmu.enableVbusVoltageMeasure();
 
   // 只读，不碰任何电源轨寄存器。
   // 之前这里"确保打开" DC1/ALDO/BLDO，是用「读-改-写」实现的：一旦某次读失败
@@ -64,9 +95,7 @@ bool powerOnUsb() {
 
 int8_t powerBatteryPercent() {
   if (!s_pmuOk || !s_pmu.isBatteryConnect()) return -1;
-  const int p = s_pmu.getBatteryPercent();
-  if (p < 0) return -1;
-  return (int8_t)(p > 100 ? 100 : p);
+  return voltageToPercent(powerBatteryVoltage());
 }
 
 #else
@@ -93,25 +122,6 @@ float readBatteryVoltageOnce() {
   for (int i = 0; i < N; i++) acc += analogReadMilliVolts(BAT_ADC_PIN);
   float pinMv = (float)acc / N;
   return pinMv * BAT_VOLT_DIVIDER / 1000.0f;
-}
-
-// 单节锂电的粗略曲线，够用来显示百分比
-int8_t voltageToPercent(float v) {
-  if (v < 0) return -1;
-  static const float kCurve[][2] = {
-      {3.30f, 0},  {3.50f, 12}, {3.65f, 30}, {3.75f, 50},
-      {3.85f, 68}, {3.95f, 82}, {4.05f, 92}, {4.20f, 100},
-  };
-  const int n = sizeof(kCurve) / sizeof(kCurve[0]);
-  if (v <= kCurve[0][0]) return 0;
-  if (v >= kCurve[n - 1][0]) return 100;
-  for (int i = 1; i < n; i++) {
-    if (v <= kCurve[i][0]) {
-      float t = (v - kCurve[i - 1][0]) / (kCurve[i][0] - kCurve[i - 1][0]);
-      return (int8_t)(kCurve[i - 1][1] + t * (kCurve[i][1] - kCurve[i - 1][1]));
-    }
-  }
-  return 100;
 }
 
 }  // namespace

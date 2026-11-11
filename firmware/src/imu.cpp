@@ -6,6 +6,7 @@
 #include <math.h>
 
 #include "board_config.h"
+#include "attitude.h"  // 重力 -> 旋转量（纯函数，主机侧有测试）
 
 namespace {
 
@@ -63,29 +64,9 @@ bool probe(uint8_t addr) {
   return id == QMI8658_WHO_AM_I;
 }
 
-// 由重力在屏幕平面上的方向决定基础方向。
-//
-// 推导（屏幕像素坐标 x 向右、y 向下）：
-//   · 加速度计静止时输出的是"反作用力"方向，也就是物理上的「上」。
-//     所以物理「下」在屏幕里的方向是 d = (-ax, -ay)。
-//   · 画面要看着正，逻辑上的"下"就必须落在物理"下"上。
-//     dpRotateFrame 把画面顺时针转 90°×r 之后，逻辑"下"落到屏幕的方向 θ(r)：
-//         r=0 → (0,+1) 屏下     r=1 → (-1,0) 屏左
-//         r=2 → (0,-1) 屏上     r=3 → (+1,0) 屏右
-//   · 令 θ(r) = d，解出四个象限：
-//         d 指向屏下 → r=0    d 指向屏左 → r=1
-//         d 指向屏上 → r=2    d 指向屏右 → r=3
-//   反面代入验证：d 指向屏左时芯片 +X 朝上，即设备被逆时针转了 90°，
-//   此时画面顺时针补 90°（r=1）正好抵消。
-//
-// 注意 ax 和 ay 都要取负 —— 早先只给 ay 取了负、漏了 ax，
-// 结果两个横向姿态都差 180°，只有竖向的正/倒两种能对上。
-uint8_t baseFromGravity(float ax, float ay) {
-  const float dx = -ax;  // 物理"下"在屏幕 x 轴上的分量
-  const float dy = -ay;  // 物理"下"在屏幕 y 轴上的分量
-  if (fabsf(dy) >= fabsf(dx)) return dy >= 0 ? 0 : 2;
-  return dx >= 0 ? 3 : 1;
-}
+// 姿态判定本身在 attitude.h（纯函数，主机可测）：早先这段逻辑写在固件里，
+// 改错一次只能在板子上肉眼发现，而症状（只有某两种姿态能对上）很难描述。
+uint8_t baseFromGravity(float ax, float ay) { return dpBaseRotationFromGravity(ax, ay); }
 
 }  // namespace
 

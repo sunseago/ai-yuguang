@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "../src/rotate.h"
+#include "../src/attitude.h"
 
 static const int S = 8;  // 偶数、非 2 的幂，避免行列算错也碰巧对齐
 
@@ -88,6 +89,49 @@ int main() {
     const bool same = memcmp(a, src, sizeof(a)) == 0;
     printf("%s 转 4 次 90° 回到原图\n", same ? "PASS" : "FAIL");
     if (!same) fails++;
+  }
+
+  // 4) 姿态映射：四种摆放各应该转多少度
+  //
+  // 这里断言的极性是这块板（ESP32-S3-Touch-AMOLED-2.16）实测出来的：
+  // QMI8658 的 +X 与面板 +X 相反，所以左右横放取的是"反直觉"的那一对。
+  // 竖立的正/倒两种必须保持不变，横放两种必须和不带 X 镜像时相反。
+  {
+    struct { float ax, ay; int want; const char* name; } cases[] = {
+        {0.02f, -0.98f, 0, "竖立（正常）"},
+        {0.02f, 0.98f, 2, "竖立（倒过来）"},
+        {0.98f, 0.05f, 3, "横放 A"},
+        {-0.98f, 0.05f, 1, "横放 B"},
+        // 稍微倾斜也要落在同一象限
+        {0.30f, -0.85f, 0, "竖立（右倾 20°）"},
+        {0.85f, 0.30f, 3, "横放 A（倾斜 20°）"},
+    };
+    int bad = 0;
+    for (const auto& c : cases) {
+      const int got = (int)dpBaseRotationFromGravity(c.ax, c.ay);
+      if (got != c.want) {
+        printf("FAIL 姿态 %s: ax=%.2f ay=%.2f 期望 r=%d 得到 r=%d\n", c.name, c.ax, c.ay, c.want,
+               got);
+        bad++;
+      }
+    }
+    printf("%s 四种姿态映射（%d 个用例）\n", bad ? "FAIL" : "PASS", (int)(sizeof(cases) / sizeof(cases[0])));
+    if (bad) fails++;
+  }
+
+  // 5) 相邻象限的旋转量必须差 90°（差 180° 就是"倒过来"的 bug）：
+  //    绕一整圈应该正好走 0,1,2,3 或 0,3,2,1，不允许出现 0,1,0,1 这种。
+  {
+    const float k = 0.98f;
+    const float ring[4][2] = {{0.03f, -k}, {k, 0.03f}, {-0.03f, k}, {-k, -0.03f}};
+    int bad = 0;
+    for (int i = 0; i < 4; i++) {
+      const int a = (int)dpBaseRotationFromGravity(ring[i][0], ring[i][1]);
+      const int b = (int)dpBaseRotationFromGravity(ring[(i + 1) % 4][0], ring[(i + 1) % 4][1]);
+      if (((b - a) & 3) != 1 && ((b - a) & 3) != 3) bad++;
+    }
+    printf("%s 绕一圈相邻象限差 90°（异常 %d 处）\n", bad ? "FAIL" : "PASS", bad);
+    if (bad) fails++;
   }
 
   printf(fails ? "\n有 %d 项失败\n" : "\n全部通过\n", fails);

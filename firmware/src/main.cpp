@@ -144,6 +144,7 @@ void setup() {
   powerInit();
   Serial.printf("[dp] power=%s batt=%s\n", powerLabel(),
                 powerBatteryVoltage() < 0 ? "none" : "detected");
+  Serial.printf("[dp] batt: %.2fV (%d%%)\n", powerBatteryVoltage(), (int)powerBatteryPercent());
 
   // 屏幕电源策略要在首帧渲染前就位，否则开机那一下亮度是未定义的。
   // 把初始亮度告诉它，心跳里的 br= 才不会在第一帧前误报 0。
