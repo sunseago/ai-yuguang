@@ -8,7 +8,12 @@
 ![deps](https://img.shields.io/badge/bridge-零依赖-brightgreen)
 
 把 **WorkBuddy**、**DeepSeek Harness**、**Kimi** 三个 Agent 的任务进度和剩余额度，
-显示在桌上的 Waveshare ESP32-S3-Touch-LCD-1.54（240×240）小屏上。
+显示在桌上的小屏上。支持两块板：
+
+- Waveshare **ESP32-S3-Touch-LCD-1.54**（240×240，IPS）
+- Waveshare **ESP32-S3-Touch-AMOLED-2.16**（480×480，圆角 AMOLED，UI 按 2× 放大推屏）
+
+系统会按编译目标区分（`waveshare_lcd_154` / `waveshare_amoled_216`），固件不通用。
 抬眼扫一下就知道，不用切窗口、不用掏手机。
 
 | 总览（三张卡） | 单个详情 | 状态胶囊 | 等确认在闪 |
@@ -47,11 +52,12 @@ Kimi(余额 API + 进程)   ┘
 | --- | --- |
 | 桥接：三家数据聚合、HTTP、SSE、UDP 自动发现 | ✅ 已在本机真实数据上跑通 |
 | dsh 事件日志增量解析（多帧 zstd） | ✅ 有单元测试，含半帧写入的容错 |
-| 固件：三卡总览 / 详情页 / 信息页、触摸、按键 | ✅ **已烧录到真板并跑通**（Flash 20%，RAM 15%） |
+| 固件：三卡总览 / 详情页 / 信息页、触摸、按键 | ✅ **两块板都已烧录到真机跑通**（LCD-1.54 240×240 / AMOLED-2.16 480×480） |
+| AMOLED 2.16 适配：QSPI CO5300、2× 放大推屏、圆角遮罩、AXP2101 电源 | ✅ 实测通过（`i2c 3/3`、`imu=ok`） |
 | 界面排版 | ✅ 内置桌面预览器，不插板子也能看效果 |
 | 端到端：Wi-Fi → UDP 发现 → 拉取 → 上屏 | ✅ 实测通过（见下方验证记录） |
 | 断连降级与自动重连 | ✅ 实测通过（`bridge LOST` → `OFFLINE` → `ONLINE`） |
-| 陀螺仪（QMI8658）自动转屏 + 触摸同步逆变换 | ✅ 已烧录，`imu=ok`，方向映射已验证自洽 |
+| 陀螺仪（QMI8658）自动转屏 + 触摸同步逆变换 | ✅ 真机四方向验证（竖立/倒置/左右横放），映射有主机测试 |
 | 屏幕亮灭跟随电脑使用状态 | ✅ 实测：人走开 5 分钟变暗、30 分钟熄屏；关机/充电器 60 秒熄屏；PWR 长按手动开关机 |
 | Mac 菜单栏 App（自带 node，一键安装） | ✅ 实测通过：开机自启 / 崩溃自愈 / 孤儿进程回收 |
 | agent 弹框时卡片红闪提醒 | ✅ WorkBuddy / DeepSeek Harness 已端到端验证；Kimi 不支持 |
@@ -63,7 +69,7 @@ Kimi(余额 API + 进程)   ┘
 
 ### 0. 装成 Mac App（推荐，不用管终端）
 
-`package/dist/AI余光-0.1.2.zip` 是可直接双击的菜单栏 App，**自带 node 运行时**，
+`package/dist/AI余光-0.1.7.zip` 是可直接双击的菜单栏 App，**自带 node 运行时**，
 不需要本机装 Node，也不依赖 WorkBuddy 是否开着。
 
 ```bash
@@ -207,11 +213,17 @@ cp config.json config.local.json && chmod 600 config.local.json
 
 ```bash
 pip install esptool
+# LCD-1.54（240×240）
 esptool.py --chip esp32s3 -p /dev/cu.usbmodem101 -b 460800 \
-  write_flash 0x0 AIYuguang-0.1.2-esp32s3-16MB.bin
+  write_flash 0x0 AIYuguang-0.1.7-waveshare-lcd-154.bin
+# AMOLED-2.16（480×480）
+esptool.py --chip esp32s3 -p /dev/cu.usbmodem101 -b 460800 \
+  write_flash 0x0 AIYuguang-0.1.7-waveshare-amoled-216.bin
 ```
 
-那个 `.bin` 已经把 bootloader + 分区表 + 应用合并好了，所以偏移是 `0x0`，一条命令搞定。
+**按板子选一个文件**，别烧错：两块板的引脚和屏幕驱动完全不同。
+镜像里已经把 bootloader + 分区表 + 应用合并好了，所以偏移是 `0x0`，一条命令搞定。
+Release 里附 `SHA256SUMS.txt`，可以先 `shasum -a 256 -c SHA256SUMS.txt` 校验。
 烧完设备自动进配网模式（见下一节），**已保存的 Wi-Fi 配置会保留**；
 想连配置一起清掉就先 `esptool.py ... erase_flash`。
 
@@ -238,8 +250,15 @@ cd firmware
 想自己重新生成合并镜像（比如改了代码之后发版）：
 
 ```bash
-pio run
-B=.pio/build/waveshare_lcd_154
+cd firmware
+./tools/make_release.sh          # 两块板各出一个合并镜像 + SHA256SUMS.txt
+./tools/make_release.sh amoled   # 只出 AMOLED 2.16
+```
+
+它内部就是对两个板级目标各跑一次 `esptool merge_bin`：
+
+```bash
+B=.pio/build/<env>
 python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bin \
   -o dist/固件名.bin --flash_mode qio --flash_freq 80m --flash_size 16MB \
   0x0 $B/bootloader.bin 0x8000 $B/partitions.bin \
@@ -251,7 +270,7 @@ python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bi
 
 首次上电（NVS 里没有 Wi-Fi）：
 
-1. 屏幕显示 `SETUP MODE`，手机连 `Yuguang-xxxx`，密码 `yuguang`
+1. 屏幕显示 `SETUP MODE`，手机连 `Yuguang-xxxx`，密码 `yuguang1`
 2. 浏览器打开 `192.168.4.1`，填 Wi-Fi 名称/密码，电脑地址**可留空**（会 UDP 自动发现）
 3. 保存后设备自动重启并开始拉数据
 
