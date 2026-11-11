@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "board_config.h"  // DP_SAFE_MARGIN（圆角屏安全边距）
+
 namespace {
 
 constexpr int kCardX = 8;
@@ -104,21 +106,25 @@ void fmtDuration(char* out, size_t n, uint64_t ms) {
 void statusBar(Canvas& c, const UiInput& in) {
   bool online = in.model->bridgeOnline && in.wifiOk;
   c.fillRect(0, 0, DP_W, kBarY, dpcolor::BG);
-  c.fillCircle(11, 9, 3, online ? dpcolor::DONE : dpcolor::ERR);
-  c.text(20, 1, online ? "LINK" : "NO LINK", online ? dpcolor::MUTED : dpcolor::ERR, 1);
+  // 圆角屏：左右各留出安全边距，别让状态点/时间被面板圆角切掉
+  const int padL = 8 + DP_SAFE_MARGIN;
+  const int padR = 8 + DP_SAFE_MARGIN;
+  c.fillCircle(padL + 3, 9, 3, online ? dpcolor::DONE : dpcolor::ERR);
+  c.text(padL + 12, 1, online ? "LINK" : "NO LINK", online ? dpcolor::MUTED : dpcolor::ERR, 1);
 
   if (online) {
     // 右上角：Wi-Fi 信号格（4 格）+ 时间
     int bars = in.rssi > -55 ? 4 : in.rssi > -67 ? 3 : in.rssi > -75 ? 2 : 1;
+    const int barsX = 146 - DP_SAFE_MARGIN;
     for (int i = 0; i < 4; i++) {
       int h = 3 + i * 3;
-      c.fillRect(146 + i * 5, 15 - h, 3, h, i < bars ? dpcolor::MUTED : dpcolor::LINE);
+      c.fillRect(barsX + i * 5, 15 - h, 3, h, i < bars ? dpcolor::MUTED : dpcolor::LINE);
     }
     // 时间用桥接给的本地时间字符串，设备不需要知道时区
     const char* tm = (in.clockText && in.clockText[0]) ? in.clockText : "--:--";
-    c.textAligned(168, 1, DP_W - 8 - 168, tm, dpcolor::MUTED, 1, DP_RIGHT);
+    c.textAligned(168, 1, DP_W - padR - 168, tm, dpcolor::MUTED, 1, DP_RIGHT);
   } else {
-    c.textAligned(120, 1, 104, "RETRY", dpcolor::ERR, 1, DP_RIGHT);
+    c.textAligned(120, 1, DP_W - padR - 120, "RETRY", dpcolor::ERR, 1, DP_RIGHT);
   }
   c.hline(0, kBarY, DP_W, dpcolor::LINE);
 }

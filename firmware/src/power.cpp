@@ -4,6 +4,86 @@
 
 #include "board_config.h"
 
+#if defined(BOARD_AMOLED216)
+// ---------------- AMOLED 2.16：AXP2101 ----------------
+// 这块板没有 BAT_EN 保持脚，也没有电池分压 ADC：电压、充电状态都从 PMIC 读。
+#include <Wire.h>
+#include <XPowersLib.h>
+
+namespace {
+
+XPowersPMU s_pmu;
+bool s_pmuOk = false;
+bool s_usbCache = false;
+uint32_t s_usbAt = 0;
+
+}  // namespace
+
+void powerInit() {
+  // 总线已由触摸初始化（XPowersLib 的 begin 若在已初始化总线上再设引脚会失败，
+  // 所以这里不自己 Wire.begin）。
+  s_pmuOk = s_pmu.begin(Wire, AXP2101_SLAVE_ADDRESS, IIC_SDA, IIC_SCL);
+  if (!s_pmuOk) {
+    Serial.println("[dp] pmu=FAILED (AXP2101 not found)");
+    return;
+  }
+  s_pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
+  s_pmu.clearIrqStatus();
+  s_pmu.enableBattDetection();
+  s_pmu.enableBattVoltageMeasure();
+  s_pmu.enableVbusVoltageMeasure();
+  // 这块板的 VCC3V3 由 DCDC1 提供，I2C 上拉、触摸、IMU 都吃这条轨。
+  // PMU 在掉电/长时间断电后会回到"输出关闭"状态（表现为整条 I2C 只剩高电平、
+  // 一颗器件都扫不到），所以每次启动都显式打开并确认。
+  s_pmu.setDC1Voltage(3300);
+  s_pmu.enableDC1();
+  // 触摸/显示相关的小轨（原理图 ALDO1/2 = 3.3V，BLDO1/2 = 2.8V）也一并确保打开
+  s_pmu.setALDO1Voltage(3300);
+  s_pmu.enableALDO1();
+  s_pmu.setALDO2Voltage(3300);
+  s_pmu.enableALDO2();
+  s_pmu.setBLDO1Voltage(2800);
+  s_pmu.enableBLDO1();
+  s_pmu.setBLDO2Voltage(2800);
+  s_pmu.enableBLDO2();
+  Serial.printf("[dp] pmu rails: dc1=%d/%umV aldo1=%d aldo2=%d bldo1=%d bldo2=%d\n",
+                s_pmu.isEnableDC1() ? 1 : 0, s_pmu.getDC1Voltage(),
+                s_pmu.isEnableALDO1() ? 1 : 0, s_pmu.isEnableALDO2() ? 1 : 0,
+                s_pmu.isEnableBLDO1() ? 1 : 0, s_pmu.isEnableBLDO2() ? 1 : 0);
+  Serial.printf("[dp] pmu=AXP2101 batt=%d vbus=%dmV\n", s_pmu.isBatteryConnect() ? 1 : 0,
+                (int)s_pmu.getVbusVoltage());
+}
+
+float powerBatteryVoltage() {
+  if (!s_pmuOk || !s_pmu.isBatteryConnect()) return -1.0f;
+  const uint16_t mv = s_pmu.getBattVoltage();
+  return mv > 2000 ? mv / 1000.0f : -1.0f;
+}
+
+bool powerOnUsb() {
+  uint32_t now = millis();
+  if (s_usbAt && now - s_usbAt < 2000) return s_usbCache;
+  s_usbAt = now;
+  bool usb = false;
+  if (s_pmuOk) {
+    usb = s_pmu.isVbusIn();
+  } else {
+    // PMIC 读不到时按"墙插"处理：阈值宽松，不会因为读不到电池就误熄屏
+    usb = true;
+  }
+  s_usbCache = usb;
+  return usb;
+}
+
+int8_t powerBatteryPercent() {
+  if (!s_pmuOk || !s_pmu.isBatteryConnect()) return -1;
+  const int p = s_pmu.getBatteryPercent();
+  if (p < 0) return -1;
+  return (int8_t)(p > 100 ? 100 : p);
+}
+
+#else
+// ---------------- LCD 1.54：USB SOF + 电池 ADC ----------------
 // 本板固件把日志走在原生 USB（ARDUINO_USB_MODE=1 + ARDUINO_USB_CDC_ON_BOOT=1），
 // 这时 Serial 就是 HWCDC，它的 isPlugged() 由 USB SOF 中断维护，
 // 能真实反映"线另一头有没有主机"。core 2.0.17 没有 usb_serial_jtag_is_connected()。
@@ -85,6 +165,7 @@ bool powerOnUsb() {
 int8_t powerBatteryPercent() {
   return voltageToPercent(powerBatteryVoltage());
 }
+#endif
 
 const char* powerLabel() {
   static char buf[16];
@@ -99,4 +180,3 @@ const char* powerLabel() {
   snprintf(buf, sizeof(buf), "BAT %d%%", pct);
   return buf;
 }
-

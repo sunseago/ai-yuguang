@@ -15,16 +15,19 @@ import time
 import serial
 
 if len(sys.argv) < 2:
-    sys.exit("用法: python3 cap.py <串口> [秒数，默认 40]")
+    sys.exit("用法: python3 cap.py <串口> [秒数，默认 40] [dtr 0/1，默认 1]")
 
 port = sys.argv[1]
 seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 40.0
+# LCD-1.54（HWCDC）必须拉 DTR 才会把数据发出来；AMOLED-2.16 的 USB-JTAG
+# 反过来，DTR=1 会把它按在复位里（一个字节都收不到），要传 0。
+dtr = (sys.argv[3] != "0") if len(sys.argv) > 3 else True
 
 s = serial.Serial()
 s.port = port
 s.baudrate = 115200
 s.timeout = 0.3
-s.dtr = True   # 关键：不拉 DTR 就一个字节都收不到
+s.dtr = dtr
 s.rts = False  # 别动 RTS，某些板子的自动复位电路会因此重启
 s.open()
 

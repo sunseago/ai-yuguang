@@ -98,13 +98,23 @@ bool imuInit() {
     p.end();
   }
 
-  if (!probe(QMI8658_ADDR_HIGH) && !probe(QMI8658_ADDR_LOW)) {
+  // 不要再 Wire.begin()：这条总线由触摸/PMU 的库初始化，重复初始化会让它们
+  // 后续的 setPins 失败。IMU 复用同一条已经跑起来的总线。
+  bool found = false;
+  for (int attempt = 0; attempt < 4 && !found; attempt++) {
+    if (!probe(QMI8658_ADDR_HIGH) && !probe(QMI8658_ADDR_LOW)) {
+      delay(60);
+      continue;
+    }
+    found = true;
+  }
+  if (!found) {
     s_ready = false;
     return false;
   }
 
   writeReg(REG_RESET, 0xB0);  // 软复位
-  delay(15);
+  delay(25);
   writeReg(REG_CTRL1, 0x40);              // 地址自增 + 小端读
   writeReg(REG_CTRL2, CTRL2_8G_250HZ);    // ±8g / 250Hz
   writeReg(REG_CTRL3, 0x00);              // 陀螺仪保持关闭

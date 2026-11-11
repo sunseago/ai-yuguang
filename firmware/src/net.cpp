@@ -97,8 +97,17 @@ button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:10px;backg
 void startConfigPortal() {
   WiFi.mode(WIFI_AP);
   String apName = "Yuguang-" + String((uint32_t)(ESP.getEfuseMac() & 0xFFFF), HEX);
-  WiFi.softAP(apName.c_str(), "yuguang");
-  Serial.printf("[dp] setup AP: %s  -> http://192.168.4.1\n", apName.c_str());
+  // WPA2 要求 8–63 位，原来的 "yuguang" 只有 7 位，softAP 直接失败（日志里是
+  // "passphrase too short"），新板第一次配网会连热点都起不来。
+  static const char* kApPass = "yuguang1";
+  bool apOk = WiFi.softAP(apName.c_str(), kApPass);
+  if (!apOk) {
+    // 再退一步：开一个无密码热点，至少还能进配网页
+    Serial.println("[dp] AP with password failed, fallback to open AP");
+    apOk = WiFi.softAP(apName.c_str());
+  }
+  Serial.printf("[dp] setup AP: %s (%s) -> http://192.168.4.1\n", apName.c_str(),
+                apOk ? (kApPass[0] ? "wpa2" : "open") : "FAILED");
   s_dns = new DNSServer();
   s_dns->start(53, "*", WiFi.softAPIP());
   s_server = new WebServer(80);
@@ -130,7 +139,7 @@ void startConfigPortal() {
     c.text(12, 40, "SETUP MODE", dpcolor::TEXT, 2);
     c.text(12, 84, "1. join wifi:", dpcolor::MUTED, 1);
     c.text(12, 102, apName.c_str(), dpcolor::THINK, 1);
-    c.text(12, 120, "   pass yuguang", dpcolor::MUTED, 1);
+    c.text(12, 120, "   pass yuguang1", dpcolor::MUTED, 1);
     c.text(12, 150, "2. open 192.168.4.1", dpcolor::MUTED, 1);
     displayPush(buf);
   }

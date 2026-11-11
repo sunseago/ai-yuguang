@@ -112,13 +112,16 @@ struct LineBuf {
 };
 
 void setup() {
-  // 电池供电时必须第一时间拉高电源保持脚，否则会掉电
+#ifdef BAT_EN
+  // 电池供电时必须第一时间拉高电源保持脚，否则会掉电。
+  // AMOLED 板走 AXP2101，没有这个脚（GPIO2 在那里是 SD 时钟，绝不能拉高）。
   pinMode(BAT_EN, OUTPUT);
   digitalWrite(BAT_EN, HIGH);
+#endif
 
   Serial.begin(115200);
   delay(150);
-  Serial.printf("\n[dp] AI余光 %s boot\n", DP_FW_VERSION);
+  Serial.printf("\n[dp] AI余光 %s boot (%s)\n", DP_FW_VERSION, BOARD_NAME);
   Serial.printf("[dp] psram=%u freeheap=%u\n", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreeHeap());
 
   displayInit();
