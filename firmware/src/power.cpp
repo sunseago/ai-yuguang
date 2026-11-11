@@ -27,31 +27,18 @@ void powerInit() {
     Serial.println("[dp] pmu=FAILED (AXP2101 not found)");
     return;
   }
-  s_pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
-  s_pmu.clearIrqStatus();
-  s_pmu.enableBattDetection();
-  s_pmu.enableBattVoltageMeasure();
-  s_pmu.enableVbusVoltageMeasure();
-  // 这块板的 VCC3V3 由 DCDC1 提供，I2C 上拉、触摸、IMU 都吃这条轨。
-  // PMU 在掉电/长时间断电后会回到"输出关闭"状态（表现为整条 I2C 只剩高电平、
-  // 一颗器件都扫不到），所以每次启动都显式打开并确认。
-  s_pmu.setDC1Voltage(3300);
-  s_pmu.enableDC1();
-  // 触摸/显示相关的小轨（原理图 ALDO1/2 = 3.3V，BLDO1/2 = 2.8V）也一并确保打开
-  s_pmu.setALDO1Voltage(3300);
-  s_pmu.enableALDO1();
-  s_pmu.setALDO2Voltage(3300);
-  s_pmu.enableALDO2();
-  s_pmu.setBLDO1Voltage(2800);
-  s_pmu.enableBLDO1();
-  s_pmu.setBLDO2Voltage(2800);
-  s_pmu.enableBLDO2();
-  Serial.printf("[dp] pmu rails: dc1=%d/%umV aldo1=%d aldo2=%d bldo1=%d bldo2=%d\n",
-                s_pmu.isEnableDC1() ? 1 : 0, s_pmu.getDC1Voltage(),
-                s_pmu.isEnableALDO1() ? 1 : 0, s_pmu.isEnableALDO2() ? 1 : 0,
-                s_pmu.isEnableBLDO1() ? 1 : 0, s_pmu.isEnableBLDO2() ? 1 : 0);
-  Serial.printf("[dp] pmu=AXP2101 batt=%d vbus=%dmV\n", s_pmu.isBatteryConnect() ? 1 : 0,
-                (int)s_pmu.getVbusVoltage());
+
+  // 只读，不碰任何电源轨寄存器。
+  // 之前这里"确保打开" DC1/ALDO/BLDO，是用「读-改-写」实现的：一旦某次读失败
+  // 拿到 0，回写时就会把寄存器里其它使能位一起清掉，直接熄掉板上某条轨，
+  // 且 PMU 保持供电不会自己复位，表现为整条 I2C 上所有器件同时消失、断电才恢复。
+  // 微雪官方示例也从不配置电源轨——板子出厂默认状态就是对的，这里只做观测。
+  const bool dc1 = s_pmu.isEnableDC1();
+  Serial.printf("[dp] pmu=AXP2101 batt=%d vbus=%dmV dc1=%d/%umV aldo1=%d aldo2=%d bldo1=%d bldo2=%d\n",
+                s_pmu.isBatteryConnect() ? 1 : 0, (int)s_pmu.getVbusVoltage(), dc1 ? 1 : 0,
+                dc1 ? (unsigned)s_pmu.getDC1Voltage() : 0u, s_pmu.isEnableALDO1() ? 1 : 0,
+                s_pmu.isEnableALDO2() ? 1 : 0, s_pmu.isEnableBLDO1() ? 1 : 0,
+                s_pmu.isEnableBLDO2() ? 1 : 0);
 }
 
 float powerBatteryVoltage() {

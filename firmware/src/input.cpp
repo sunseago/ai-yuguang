@@ -14,87 +14,70 @@
 namespace {
 TouchDrvCST92xx s_touch;
 bool s_touchOk = false;
+uint32_t s_touchRetryAt = 0;
+uint8_t s_touchRetries = 0;
 
-// 位翻转探测：完全绕开 ESP32 的 I2C 外设，用 GPIO 手动发一个地址字节看有没有 ACK。
-// 用来区分「Wire 配置问题」和「器件真的不在总线上」。
-bool bbProbe(int sda, int scl, uint8_t addr7) {
-  pinMode(sda, INPUT_PULLUP);
-  pinMode(scl, INPUT_PULLUP);
-  delayMicroseconds(50);
-  if (!digitalRead(sda) || !digitalRead(scl)) return false;  // 总线被按住
-
-  auto sdaLow = [&] { pinMode(sda, OUTPUT); digitalWrite(sda, LOW); };
-  auto sdaRel = [&] { pinMode(sda, INPUT_PULLUP); };
-  auto sclLow = [&] { pinMode(scl, OUTPUT); digitalWrite(scl, LOW); };
-  auto sclRel = [&] { pinMode(scl, INPUT_PULLUP); };
-
-  // START
-  sdaRel(); sclRel(); delayMicroseconds(5);
-  sdaLow(); delayMicroseconds(5);
-  sclLow(); delayMicroseconds(5);
-
-  // 地址 + 写位
-  for (int i = 7; i >= 0; i--) {
-    if ((addr7 >> i) & 1) sdaRel(); else sdaLow();
-    delayMicroseconds(4);
-    sclRel(); delayMicroseconds(6);
-    sclLow(); delayMicroseconds(4);
-  }
-
-  // 第 9 拍读 ACK（从机拉低 SDA）
-  sdaRel(); delayMicroseconds(4);
-  sclRel(); delayMicroseconds(6);
-  const bool ack = digitalRead(sda) == LOW;
-  sclLow(); delayMicroseconds(4);
-
-  // STOP
-  sdaLow(); delayMicroseconds(4);
-  sclRel(); delayMicroseconds(4);
-  sdaRel(); delayMicroseconds(4);
-  return ack;
+bool i2cProbe(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  return Wire.endTransmission() == 0;
 }
 
-// 标准 I2C 总线恢复：某个从机在传输中被复位打断时，会把 SDA 一直按低，
-// 让后续所有通信都失败。这里用 SCL 打 9 个时钟把它"顶"出去，再发一个 STOP。
-void i2cBusRecover() {
+// 从机在传输中途被复位打断时，会把 SDA/SCL 一直按住，之后所有通信都失败。
+// 9 个时钟 + STOP 是 I2C 规范里标准的解锁序列，先做掉再判断总线。
+void i2cUnstick() {
   pinMode(IIC_SDA, INPUT_PULLUP);
   pinMode(IIC_SCL, INPUT_PULLUP);
   delayMicroseconds(50);
-  if (digitalRead(IIC_SDA) && digitalRead(IIC_SCL)) return;  // 本来就是空闲的
-
-  pinMode(IIC_SCL, OUTPUT);
+  if (digitalRead(IIC_SDA) && digitalRead(IIC_SCL)) return;  // 总线本来就空闲
   for (int i = 0; i < 9; i++) {
     digitalWrite(IIC_SCL, LOW);
-    delayMicroseconds(5);
-    digitalWrite(IIC_SCL, HIGH);
-    delayMicroseconds(5);
+    pinMode(IIC_SCL, OUTPUT);
+    delayMicroseconds(10);
+    pinMode(IIC_SCL, INPUT_PULLUP);
+    delayMicroseconds(10);
   }
-  // STOP：SCL 高时把 SDA 从低拉到高
-  pinMode(IIC_SDA, OUTPUT);
   digitalWrite(IIC_SDA, LOW);
-  delayMicroseconds(5);
-  digitalWrite(IIC_SCL, HIGH);
-  delayMicroseconds(5);
-  digitalWrite(IIC_SDA, HIGH);
-  delayMicroseconds(5);
+  pinMode(IIC_SDA, OUTPUT);
+  delayMicroseconds(10);
+  pinMode(IIC_SCL, INPUT_PULLUP);  // SCL 高时把 SDA 拉起 = STOP
+  delayMicroseconds(10);
   pinMode(IIC_SDA, INPUT_PULLUP);
-  pinMode(IIC_SCL, INPUT_PULLUP);
-  Serial.printf("[dp] i2c bus recovered, sda=%d scl=%d\n", digitalRead(IIC_SDA),
-                digitalRead(IIC_SCL));
+  delayMicroseconds(10);
 }
 
-void bbScan() {
-  struct Pair { int sda, scl; const char* name; };
-  static const Pair pairs[] = {
-      {IIC_SDA, IIC_SCL, "15/14"},   // 微雪官方 pin_config
-      {IIC_SCL, IIC_SDA, "14/15"},   // 万一标反
-      {47, 48, "47/48"},
-      {41, 42, "41/42"},
-  };
-  for (const auto& p : pairs) {
-    Serial.printf("[dp] bb %s: 34=%d 5A=%d 6B=%d\n", p.name, bbProbe(p.sda, p.scl, 0x34) ? 1 : 0,
-                  bbProbe(p.sda, p.scl, 0x5A) ? 1 : 0, bbProbe(p.sda, p.scl, 0x6B) ? 1 : 0);
+bool touchBegin() {
+  // 复位/中断引脚交给 SensorLib；坐标变换按微雪示例：交换 XY + X 镜像。
+  s_touch.setPins(TP_RST, TP_INT);
+  const bool ok = s_touch.begin(Wire, CST92XX_SLAVE_ADDRESS, IIC_SDA, IIC_SCL);
+  if (ok) {
+    s_touch.setMaxCoordinates(LCD_W, LCD_H);
+    s_touch.setSwapXY(true);
+    s_touch.setMirrorXY(true, false);
   }
+  return ok;
+}
+
+// SDA/SCL 短接检测。两线短在一起时：START 能发出去、任何器件都不可能 ACK，
+// 表现和"器件没电"一模一样（都是整条总线一个器件都扫不到），但这是硬件故障，
+// 改固件永远修不好。启动时花 4ms 查一下，日志里直说，省得下次又从总线时序查起。
+bool i2cShortCheck() {
+  pinMode(IIC_SDA, INPUT_PULLUP);
+  pinMode(IIC_SCL, INPUT_PULLUP);
+  delay(2);
+
+  digitalWrite(IIC_SDA, LOW);
+  pinMode(IIC_SDA, OUTPUT);  // 拉低 SDA，看 SCL 是否跟着下去
+  delay(2);
+  const bool sclFollows = digitalRead(IIC_SCL) == 0;
+  pinMode(IIC_SDA, INPUT_PULLUP);
+
+  digitalWrite(IIC_SCL, LOW);
+  pinMode(IIC_SCL, OUTPUT);  // 反向再确认一次
+  delay(2);
+  const bool sdaFollows = digitalRead(IIC_SDA) == 0;
+  pinMode(IIC_SCL, INPUT_PULLUP);
+
+  return sclFollows || sdaFollows;
 }
 }  // namespace
 #endif
@@ -182,21 +165,43 @@ void inputInit() {
 #if defined(BOARD_AMOLED216)
   pinMode(TP_INT, INPUT_PULLUP);
 
-  // 先做一次位翻转体检，输出到串口；正常情况会看到 15/14: 34=1 5A=1 6B=1
-  i2cBusRecover();
-  bbScan();
-
-  // 不要在这里先 Wire.begin()：SensorLib 的 begin(wire, addr, sda, scl) 会自己
-  // 初始化总线，提前初始化会让它内部的 setPins 失败（"bus already initialized"）
-  // 从而 begin 直接返回 false —— 实测触摸会消失。总线交给它管。
-  s_touch.setPins(TP_RST, TP_INT);
-  s_touchOk = s_touch.begin(Wire, CST92XX_SLAVE_ADDRESS, IIC_SDA, IIC_SCL);
-  if (s_touchOk) {
-    s_touch.setMaxCoordinates(LCD_W, LCD_H);
-    s_touch.setSwapXY(true);
-    s_touch.setMirrorXY(true, false);
+  // 先查短路：短了的话后面所有探测都没有意义，日志里必须一眼看出来
+  if (i2cShortCheck()) {
+    Serial.println(
+        "[dp] ERROR: SDA(15) 与 SCL(14) 短接 —— I2C 硬件故障，触摸/IMU/PMU 全部不可用");
   }
+
+  // 总线由这里统一起起来，再交给各库使用。
+  // 顺序很关键：实测「先 Wire.begin 再让 SensorLib begin」是唯一稳定组合
+  // （SensorLib 内部会 setPins 并打一行 "bus already initialized"，但它容错，
+  //  真正会失败的是反过来：库自己起总线、PMU 再 begin 时拿不到）。
+  Wire.begin(IIC_SDA, IIC_SCL, 400000);
+  Wire.setTimeOut(20);
+  delay(5);
+
+  // 探三颗器件确认总线活着。上电初期外设轨可能还没稳，所以带重试 + 总线解锁：
+  // 一次探测失败就判死会让"晚 100ms 起来"的板子永远没有触摸。
+  int alive = 0;
+  for (int attempt = 0; attempt < 4; attempt++) {
+    if (attempt) {
+      i2cUnstick();
+      delay(150);
+    }
+    alive = 0;
+    for (uint8_t a : {AXP2101_ADDR, CST92XX_ADDR, QMI8658_ADDR_HIGH}) {
+      if (i2cProbe(a)) alive++;
+    }
+    if (alive) break;
+  }
+  Serial.printf("[dp] i2c alive=%d/3 (34=PMU 5A=touch 6B=IMU)\n", alive);
+
+  s_touchOk = touchBegin();
   Serial.printf("[dp] touch=%s\n", s_touchOk ? "CST9220" : "FAILED");
+  if (!s_touchOk) {
+    // 交给 inputPoll 继续试：如果是外设轨晚起，能自己长回来，不用重启
+    s_touchRetryAt = millis() + 3000;
+    s_touchRetries = 0;
+  }
 #else
   pinMode(TP_RST, OUTPUT);
   digitalWrite(TP_RST, LOW);
@@ -220,6 +225,19 @@ void inputInit() {
 }
 
 void inputPoll() {
+#if defined(BOARD_AMOLED216)
+  // 触摸初始化失败时后台慢慢重试：外设电源轨晚起/总线被锁都会自愈，
+  // 不用整机重启。20 次之后放弃（大概 100 秒），免得一直空转。
+  if (!s_touchOk && s_touchRetries < 20 && (int32_t)(millis() - s_touchRetryAt) >= 0) {
+    s_touchRetries++;
+    s_touchRetryAt = millis() + 5000;
+    if (i2cProbe(CST92XX_ADDR)) {
+      s_touchOk = touchBegin();
+      Serial.printf("[dp] touch retry #%u -> %s\n", s_touchRetries, s_touchOk ? "CST9220" : "FAILED");
+    }
+  }
+#endif
+
   DpTouch t = readTouch();
   // 屏幕可能被 IMU 转过，触摸要反变换回 UI 逻辑坐标再做手势判定，
   // 否则转过之后点卡片会点到别处、滑动手势方向也是反的

@@ -26,6 +26,8 @@ static bool gDirty = true;
 static bool gLastOnline = false;
 static uint8_t gLastRot = 0;
 static bool gImuOk = false;
+static uint8_t gImuRetries = 0;
+static uint32_t gImuRetryAt = 0;
 
 // 主循环的"最长停顿"。心跳里打出来，这样"卡住"这件事有数字可看，
 // 不用靠手感猜——触摸丢点、转屏迟钝都是它的下游症状。
@@ -123,6 +125,12 @@ void setup() {
   delay(150);
   Serial.printf("\n[dp] AI余光 %s boot (%s)\n", DP_FW_VERSION, BOARD_NAME);
   Serial.printf("[dp] psram=%u freeheap=%u\n", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreeHeap());
+
+#ifdef DP_I2C_DIAG
+  // 必须在任何 I2C 库初始化之前跑，否则拿到的总线状态是别人改过的
+  extern void i2cDiagRun();
+  i2cDiagRun();
+#endif
 
   displayInit();
   uint16_t* buf = displayBuffer();
@@ -307,6 +315,20 @@ void loop() {
   }
 
   // ---- 自动转屏：只有明显立起来才切，平放时保持不动 ----
+  // 开机时 IMU 没起来（外设轨没稳/总线被锁）不代表它坏了，定期再试几次，
+  // 能自己长回来，不用整机重启。
+  if (!gImuOk && gImuRetries < 12 && (int32_t)(millis() - gImuRetryAt) >= 0) {
+    gImuRetries++;
+    gImuRetryAt = millis() + 10000;
+    gImuOk = imuInit();
+    Serial.printf("[dp] imu retry #%u -> %s\n", gImuRetries, gImuOk ? "ok" : "FAILED");
+    if (gImuOk) {
+      displaySetRotation(imuRotation());
+      gLastRot = displayRotation();
+      gDirty = true;
+    }
+  }
+
   if (gImuOk) {
     uint8_t r = imuPoll();
     if (r != gLastRot) {
