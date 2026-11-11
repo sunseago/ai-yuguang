@@ -224,6 +224,12 @@ esptool.py --chip esp32s3 -p /dev/cu.usbmodem101 -b 460800 \
 **按板子选一个文件**，别烧错：两块板的引脚和屏幕驱动完全不同。
 镜像里已经把 bootloader + 分区表 + 应用合并好了，所以偏移是 `0x0`，一条命令搞定。
 Release 里附 `SHA256SUMS.txt`，可以先 `shasum -a 256 -c SHA256SUMS.txt` 校验。
+
+> ⚠️ **合并镜像是"全清安装"**：它从 `0x0` 一直写到 `0x151500`，中间会用 `0xFF`
+> 填满空隙，而 **NVS 分区在 `0x9000`**（Wi-Fi 账号密码、屏幕朝向偏移都存在那里）。
+> 所以烧完要重新配网（见下一节），`rot_off` 也会回到默认。
+> 想保留配置就别用合并镜像：走下面「从源码编译」的 `./flash.sh`，
+> 它只写 bootloader/分区表/应用三段，NVS 不动。
 烧完设备自动进配网模式（见下一节），**已保存的 Wi-Fi 配置会保留**；
 想连配置一起清掉就先 `esptool.py ... erase_flash`。
 
@@ -255,12 +261,15 @@ cd firmware
 ./tools/make_release.sh amoled   # 只出 AMOLED 2.16
 ```
 
-它内部就是对两个板级目标各跑一次 `esptool merge_bin`：
+它内部就是对两个板级目标各跑一次 `esptool merge_bin`。注意三个 `keep` 不能省：
+`merge_bin` 会把第一段 bootloader 的头部改写成命令行指定的值，而 PlatformIO 产出的
+bootloader 头部是 `dio`。改成 `qio` 后 ROM 按 QIO 去读会失败，表现是上电即
+`ets_loader.c 79` 无限重启、串口一个字节都没有（0.1.7 发版时踩过）。
 
 ```bash
 B=.pio/build/<env>
 python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bin \
-  -o dist/固件名.bin --flash_mode qio --flash_freq 80m --flash_size 16MB \
+  -o dist/固件名.bin --flash_mode keep --flash_freq keep --flash_size keep \
   0x0 $B/bootloader.bin 0x8000 $B/partitions.bin \
   0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
   0x10000 $B/firmware.bin

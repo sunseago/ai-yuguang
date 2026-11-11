@@ -49,8 +49,11 @@ for env in "${ENVS[@]}"; do
   pio run -e "$env" >/dev/null || { echo "编译失败: $env"; exit 1; }
   B=".pio/build/$env"
   OUT="dist/AIYuguang-$VERSION-${NAMES[$env]}.bin"
+  # 三个参数一律 keep：merge_bin 默认会把第一段 bootloader 的头部改写成命令行给的值，
+  # 而 PlatformIO 产出的 bootloader 头部是 dio —— 改成 qio 后 ROM 按 QIO 去读会失败，
+  # 表现是上电后 `ets_loader.c 79` 反复重启、一个字节日志都出不来。
   PYTHONPATH="$ORIG_PYTHONPATH" "$PY" "$ESPTOOL" --chip esp32s3 merge_bin -o "$OUT" \
-    --flash_mode qio --flash_freq 80m --flash_size 16MB \
+    --flash_mode keep --flash_freq keep --flash_size keep \
     0x0 "$B/bootloader.bin" 0x8000 "$B/partitions.bin" \
     0xe000 "$BOOT_APP0" 0x10000 "$B/firmware.bin" >/dev/null
   printf '  %s  %s 字节\n' "$OUT" "$(stat -f%z "$OUT")"
