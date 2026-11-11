@@ -3,6 +3,11 @@
 #include <Arduino.h>
 
 #include "board_config.h"
+#include "display.h"
+
+#include <esp_sleep.h>
+
+#include "driver/rtc_io.h"
 
 // ---- 两块板共用的电压 -> 电量曲线 ----
 // 单节锂电的粗略曲线，够用来显示百分比。
@@ -176,4 +181,33 @@ const char* powerLabel() {
   if (pct < 0) return "BAT ?";
   snprintf(buf, sizeof(buf), "BAT %d%%", pct);
   return buf;
+}
+
+// ---------------- 关机：深度睡眠 ----------------
+// 长按 PWR 触发（见 input.cpp 的 1s 判定）。
+//
+// 为什么不去拉低 BAT_EN 做"真断电"：这块板的 BAT_EN 是电源保持脚，放掉之后
+// 电池供电会真的断电，只能靠再按 PWR 的硬件上电电路重新起来。万一那一路没接好，
+// 就变成"关得掉、开不了"，只能拆电池。深度睡眠在观感上一样（黑屏、静止、几乎不耗电），
+// 但任何情况下长按 PWR 都能唤醒，不会把板子卡死。
+void powerOffDeepSleep() {
+#if BTN_PWR >= 0
+  // 先清屏再睡：LCD 定在最后一帧会一直亮着背光，AMOLED 更会烧屏
+  displayFill(0x0000);
+  displayBrightness(0);
+  Serial.println("[dp] power off -> deep sleep (long press PWR to wake)");
+  Serial.flush();
+
+  // 必须等按键松开。ext0 是电平唤醒，手还按着就睡下去会立刻被自己唤醒，
+  // 表现成"按一下黑屏又马上亮回来"。
+  const uint32_t t0 = millis();
+  while (digitalRead(BTN_PWR) == LOW && millis() - t0 < 3000) delay(20);
+
+  // 睡眠期间 GPIO 交给 RTC 域，上拉要显式打开，否则引脚悬空会被噪声唤醒
+  rtc_gpio_pullup_en((gpio_num_t)BTN_PWR);
+  rtc_gpio_pulldown_dis((gpio_num_t)BTN_PWR);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)BTN_PWR, 0);  // 低电平（按下）唤醒
+  delay(50);
+  esp_deep_sleep_start();  // 不返回；唤醒后等于重新上电，从头跑 setup()
+#endif
 }

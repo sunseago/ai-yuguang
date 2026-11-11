@@ -105,6 +105,7 @@ bool s_pwrDown = false;
 uint32_t s_pwrDownAt = 0;
 bool s_pwrFired = false;
 bool s_pwrArmed = true;
+bool s_pwrShortFired = false;  // 短按：手动熄屏/亮屏
 
 // 机械按键的抖动会造出一串假边沿（短按变两次、长按被重置）。
 // 状态必须稳定 20ms 才认，够便宜也够用。
@@ -312,6 +313,8 @@ void inputPoll() {
     }
   } else if (!pwr && s_pwrDown) {
     s_pwrDown = false;
+    // 没到 1s 就松开 = 短按。太短的（<60ms）算抖动，不认。
+    if (!s_pwrFired && now - s_pwrDownAt > 60) s_pwrShortFired = true;
   }
 #endif
 }
@@ -347,5 +350,11 @@ bool inputTakeUserShort() {
 bool inputTakePwrLong() {
   bool v = s_pwrFired;
   s_pwrFired = false;
+  return v;
+}
+
+bool inputTakePwrShort() {
+  bool v = s_pwrShortFired;
+  s_pwrShortFired = false;
   return v;
 }

@@ -15,4 +15,8 @@ DpGesture inputTakeGesture(int& x, int& y);
 bool inputTakeBootShort();
 bool inputTakeBootLong();
 bool inputTakeUserShort();
+// 长按 1s：关机（深度睡眠）
 bool inputTakePwrLong();
+
+// 短按：手动熄屏 / 亮屏
+bool inputTakePwrShort();

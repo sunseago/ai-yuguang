@@ -301,12 +301,19 @@ void loop() {
   bool bootLong = inputTakeBootLong();
   bool userShort = inputTakeUserShort();
   bool pwrLong = inputTakePwrLong();
-  if (bootShort || bootLong || userShort) active = true;
+  bool pwrShort = inputTakePwrShort();
+  if (bootShort || bootLong || userShort || pwrShort || pwrLong) active = true;
 
-  // PWR 长按：手动开机/关机。无论屏幕什么状态都要响应，所以不放在"熄屏"过滤里。
-  if (pwrLong) {
+  // PWR 分两档，都不受"屏幕是否已熄"影响 —— 关机键必须随时有效。
+  //   短按：手动熄屏 / 亮屏（看完就走，不中断数据）
+  //   长按 1s：关机（清屏 + 深度睡眠，再长按 PWR 唤醒重启）
+  if (pwrShort) {
     screenPowerToggleManualOff();
-    Serial.printf("[dp] manual power %s\n", screenPowerIsManualOff() ? "OFF" : "ON");
+    Serial.printf("[dp] manual screen %s\n", screenPowerIsManualOff() ? "OFF" : "ON");
+  }
+  if (pwrLong) {
+    gDirty = false;  // 马上要睡，别再排下一帧
+    powerOffDeepSleep();
   }
 
   // 熄屏时短按也只用来唤醒。长按（重新配网）不拦——那是"不管屏幕怎样都要生效"的操作。

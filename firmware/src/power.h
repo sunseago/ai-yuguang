@@ -24,3 +24,7 @@ const char* powerLabel();
 
 // 电池百分比（0..100），未知返回 -1
 int8_t powerBatteryPercent();
+
+// 关机：长按 PWR 触发。清屏后进深度睡眠，再长按 PWR 唤醒（等于重新上电）。
+// 没有 PWR 键的板子（BTN_PWR < 0）是空实现。
+void powerOffDeepSleep();
