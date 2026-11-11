@@ -62,7 +62,9 @@ Kimi(余额 API + 进程)   ┘
 | PWR 键：短按熄屏 / 长按 1s 关机 | ⏳ 电池时真断电、USB 时深睡，等实机确认 |
 | 提示音：12 种音色 + 关，触控选择，音量可调 | ✅ AMOLED-2.16 `audio=ES8311 ok`，待听感确认 |
 | 卡片提醒：等确认（红，30s）/ 刚完成（绿，10s）边框+胶囊同步闪 | ✅ 两相位预览已核对，详情页也同步 |
+| 弱网自恢复：3×15s 重连 + 配网页可自动退出 | ✅ 修掉「开机慢被误判成没网、卡在 SETUP MODE 出不来」 |
 | 卡片提醒：等确认（红，30s）/ 刚完成（绿，10s）边框+胶囊同步闪 | ✅ 两相位预览已核对，详情页也同步 |
+| 弱网自恢复：3×15s 重连 + 配网页可自动退出 | ✅ 修掉「开机慢被误判成没网、卡在 SETUP MODE 出不来」 |
 | Mac 菜单栏 App（自带 node，一键安装） | ✅ 实测通过：开机自启 / 崩溃自愈 / 孤儿进程回收 |
 | agent 弹框时卡片红闪提醒 | ✅ WorkBuddy / DeepSeek Harness 已端到端验证；Kimi 不支持 |
 | 阈值蜂鸣、OTA、USB 兜底通道 | ⬜ 未做（原 P1） |
@@ -73,7 +75,7 @@ Kimi(余额 API + 进程)   ┘
 
 ### 0. 装成 Mac App（推荐，不用管终端）
 
-`package/dist/AI余光-0.1.9.zip` 是可直接双击的菜单栏 App，**自带 node 运行时**，
+`package/dist/AI余光-0.1.10.zip` 是可直接双击的菜单栏 App，**自带 node 运行时**，
 不需要本机装 Node，也不依赖 WorkBuddy 是否开着。
 
 ```bash
@@ -219,10 +221,10 @@ cp config.json config.local.json && chmod 600 config.local.json
 pip install esptool
 # LCD-1.54（240×240）
 esptool.py --chip esp32s3 -p /dev/cu.usbmodem101 -b 460800 \
-  write_flash 0x0 AIYuguang-0.1.9-waveshare-lcd-154.bin
+  write_flash 0x0 AIYuguang-0.1.10-waveshare-lcd-154.bin
 # AMOLED-2.16（480×480）
 esptool.py --chip esp32s3 -p /dev/cu.usbmodem101 -b 460800 \
-  write_flash 0x0 AIYuguang-0.1.9-waveshare-amoled-216.bin
+  write_flash 0x0 AIYuguang-0.1.10-waveshare-amoled-216.bin
 ```
 
 **按板子选一个文件**，别烧错：两块板的引脚和屏幕驱动完全不同。

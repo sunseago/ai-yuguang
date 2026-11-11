@@ -36,9 +36,6 @@ uint8_t audioAlertMode();
 uint8_t audioDoneMode();
 void audioSetAlertMode(uint8_t mode);
 void audioSetDoneMode(uint8_t mode);
-// alert 槽 0→1→…→10→0 循环，返回切换后的值
-uint8_t audioCycleAlert();
-
 // 异步播放指定音效（投进队列就返回，不阻塞主循环）
 void audioPlay(uint8_t kind);
 

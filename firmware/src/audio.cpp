@@ -217,7 +217,6 @@ struct Gen {
     nextTick = 0.05f;
     dur = durOf(k);
   }
-  bool done() const { return t >= dur; }
   float next() {
     float v;
     switch (kind) {
@@ -409,11 +408,6 @@ uint8_t audioVolume() { return s_vol; }
 void audioSetVolume(uint8_t v) {
   s_vol = v > 100 ? 100 : v;
   saveSlot("vol", s_vol);
-}
-
-uint8_t audioCycleAlert() {
-  audioSetAlertMode((uint8_t)((s_alert + 1) % DP_SND_COUNT));
-  return s_alert;
 }
 
 void audioPlay(uint8_t kind) {
