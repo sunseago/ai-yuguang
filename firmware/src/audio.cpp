@@ -21,27 +21,94 @@ constexpr float kPi = 3.14159265f;
 
 es8311_handle_t s_codec = nullptr;
 bool s_ok = false;
-uint8_t s_mode = DP_SND_BOTH;
+uint8_t s_alert = DP_SND_DROP;
+uint8_t s_done = DP_SND_WAVE;
 QueueHandle_t s_queue = nullptr;
 int16_t s_block[kBlockFrames * 2];  // 左右声道交错
 
-// 两种音效的时长（秒）
-constexpr float kDropDur = 0.16f;
-constexpr float kWaveDur = 1.70f;
+// ---------------- 乐器音色：基频 + 分音表 ----------------
+//
+// 每个分音：相对基频的比例 ratio、幅度 amp、衰减时间常数 tau（秒）。
+// 音色差别基本都在这张表里：比例决定音高关系（整数=谐波，非整数=金属感），
+// tau 决定余音（越短越像敲木头，越长越像钟）。
+struct Partial {
+  float ratio;
+  float amp;
+  float tau;
+};
 
-// ---------------- 波形合成 ----------------
+// 木琴：高次分音衰减极快，敲击感强
+const Partial kXylo[] = {{1.00f, 1.00f, 0.16f}, {3.00f, 0.38f, 0.07f}, {3.93f, 0.24f, 0.05f}};
+// 马林巴：比木琴柔和，保留 3.93 倍的非谐分音（木条特征）
+const Partial kMarimba[] = {{1.00f, 1.00f, 0.40f}, {3.93f, 0.30f, 0.16f}, {9.20f, 0.10f, 0.06f}};
+// 软铃：非整数分音 + 慢衰减，柔和但有钟的余韵
+const Partial kSoftBell[] = {
+    {1.00f, 1.00f, 1.10f}, {2.00f, 0.50f, 0.75f}, {2.76f, 0.35f, 0.55f}, {5.40f, 0.14f, 0.30f}};
+// 钢琴：整数谐波逐个衰减，二三次最明显
+const Partial kPiano[] = {{1.00f, 1.00f, 0.85f},
+                          {2.00f, 0.45f, 0.55f},
+                          {3.00f, 0.26f, 0.38f},
+                          {4.00f, 0.16f, 0.26f},
+                          {5.00f, 0.09f, 0.18f}};
+// 竖琴：像钢琴但更"空"，高次谐波收得更快
+const Partial kHarp[] = {{1.00f, 1.00f, 0.75f},
+                         {2.00f, 0.50f, 0.50f},
+                         {3.00f, 0.28f, 0.34f},
+                         {4.00f, 0.16f, 0.24f},
+                         {5.00f, 0.09f, 0.16f}};
+// 八音盒：基频很高 + 5.4 倍金属分音，衰减极快 = 脆
+const Partial kMusicBox[] = {{1.00f, 1.00f, 0.30f}, {5.40f, 0.32f, 0.11f}, {8.90f, 0.12f, 0.06f}};
+// 风铃单片：钟类分音，余音长
+const Partial kChime[] = {{1.00f, 1.00f, 0.90f}, {2.76f, 0.35f, 0.45f}, {5.40f, 0.15f, 0.22f}};
+
+struct Voice {
+  float f0;
+  float dur;
+  float attack;  // 起振时间常数，越小越硬
+  const Partial* parts;
+  uint8_t n;
+  float gain;
+};
+
+const Voice kVoiceXylo = {1046.0f, 0.45f, 0.0008f, kXylo, 3, 0.34f};
+const Voice kVoiceMarimba = {523.0f, 0.75f, 0.0015f, kMarimba, 3, 0.34f};
+const Voice kVoiceSoftBell = {784.0f, 1.40f, 0.0040f, kSoftBell, 4, 0.26f};
+const Voice kVoicePiano = {523.0f, 1.10f, 0.0012f, kPiano, 5, 0.24f};
+const Voice kVoiceHarp = {440.0f, 1.00f, 0.0020f, kHarp, 5, 0.26f};
+const Voice kVoiceMusicBox = {1760.0f, 0.60f, 0.0006f, kMusicBox, 3, 0.30f};
+
+// 叠加式合成：每个分音独立衰减；相位用绝对时间算，不需要逐分音维护状态
+float additive(float t, const Voice& v) {
+  const float att = 1.0f - expf(-t / v.attack);
+  float sum = 0;
+  for (uint8_t i = 0; i < v.n; i++) {
+    const Partial& p = v.parts[i];
+    const float env = expf(-t / p.tau);
+    sum += sinf(2.0f * kPi * p.ratio * v.f0 * t + (float)i * 0.7f) * p.amp * env;
+  }
+  return sum * att * v.gain;
+}
 
 // 水滴：音高快速上滑（像气泡破裂），包络掉得很快
 float dropSample(float t, float& phase) {
   const float f = 700.0f + 900.0f * (1.0f - expf(-t / 0.018f));
   phase += 2.0f * kPi * f / kSampleRate;
-  const float attack = 1.0f - expf(-t / 0.0015f);
-  const float env = attack * expf(-t / 0.035f);
+  const float env = (1.0f - expf(-t / 0.0015f)) * expf(-t / 0.035f);
   return sinf(phase) * env * 0.55f;
 }
 
-// 海浪：白噪声过一阶低通（约 400Hz），慢起慢落，再叠一点 0.8Hz 的起伏
-static uint32_t s_rng = 0x2545F491u;
+// 气泡：比水滴低、带 26Hz 的"咕嘟"颤音，第二声 110ms 后接上
+float bubbleSample(float t, float& phase) {
+  const float f = 300.0f + 620.0f * (1.0f - expf(-t / 0.022f));
+  phase += 2.0f * kPi * f / kSampleRate;
+  const float trem = 0.72f + 0.28f * sinf(2.0f * kPi * 26.0f * t);
+  float env = (1.0f - expf(-t / 0.002f)) * expf(-t / 0.055f);
+  if (t > 0.11f) env = fmaxf(env, expf(-(t - 0.11f) / 0.045f) * 0.6f);
+  return sinf(phase) * env * trem * 0.6f;
+}
+
+// 海浪：白噪声过一阶低通，慢起慢落，叠一点 0.8Hz 起伏
+uint32_t s_rng = 0x2545F491u;
 float whiteNoise() {
   s_rng = s_rng * 1664525u + 1013904223u;
   return (float)(s_rng >> 8) * (1.0f / 8388608.0f) - 1.0f;  // -1..1
@@ -54,7 +121,36 @@ float waveSample(float t, float& lp) {
   return lp * env * 1.7f;
 }
 
-// 一帧：算一个单声道样本
+// 轻风铃：5 片错开敲击，音高不同，像一阵风拂过
+constexpr int kChimeN = 5;
+const float kChimeF[kChimeN] = {1568.0f, 1760.0f, 2093.0f, 2349.0f, 2794.0f};
+const float kChimeAt[kChimeN] = {0.00f, 0.13f, 0.27f, 0.42f, 0.58f};
+float chimeSample(float t) {
+  float sum = 0;
+  for (int i = 0; i < kChimeN; i++) {
+    const float dt = t - kChimeAt[i];
+    if (dt <= 0) continue;
+    const Voice v = {kChimeF[i], 2.0f, 0.0015f, kChime, 3, 0.14f};
+    sum += additive(dt, v);
+  }
+  return sum;
+}
+
+float durOf(uint8_t kind) {
+  switch (kind) {
+    case DP_SND_WAVE: return 1.70f;
+    case DP_SND_CHIME: return 2.00f;
+    case DP_SND_SOFTBELL: return kVoiceSoftBell.dur;
+    case DP_SND_PIANO: return kVoicePiano.dur;
+    case DP_SND_HARP: return kVoiceHarp.dur;
+    case DP_SND_MARIMBA: return kVoiceMarimba.dur;
+    case DP_SND_MUSICBOX: return kVoiceMusicBox.dur;
+    case DP_SND_XYLO: return kVoiceXylo.dur;
+    case DP_SND_BUBBLE: return 0.22f;
+    default: return 0.16f;  // 水滴
+  }
+}
+
 struct Gen {
   uint8_t kind;
   float t = 0;
@@ -67,11 +163,23 @@ struct Gen {
     t = 0;
     phase = 0;
     lp = 0;
-    dur = (k == DP_SND_WAVE) ? kWaveDur : kDropDur;
+    dur = durOf(k);
   }
   bool done() const { return t >= dur; }
   float next() {
-    const float v = (kind == DP_SND_WAVE) ? waveSample(t, lp) : dropSample(t, phase);
+    float v;
+    switch (kind) {
+      case DP_SND_WAVE: v = waveSample(t, lp); break;
+      case DP_SND_CHIME: v = chimeSample(t); break;
+      case DP_SND_BUBBLE: v = bubbleSample(t, phase); break;
+      case DP_SND_XYLO: v = additive(t, kVoiceXylo); break;
+      case DP_SND_MARIMBA: v = additive(t, kVoiceMarimba); break;
+      case DP_SND_SOFTBELL: v = additive(t, kVoiceSoftBell); break;
+      case DP_SND_PIANO: v = additive(t, kVoicePiano); break;
+      case DP_SND_HARP: v = additive(t, kVoiceHarp); break;
+      case DP_SND_MUSICBOX: v = additive(t, kVoiceMusicBox); break;
+      default: v = dropSample(t, phase); break;
+    }
     t += 1.0f / kSampleRate;
     return v;
   }
@@ -83,8 +191,12 @@ void playBlocking(uint8_t kind) {
   int idx = 0;
   while (!g.done()) {
     const float v = g.next();
-    s_block[idx++] = (int16_t)(v * 0.55f * 32767.0f);
-    s_block[idx++] = s_block[idx - 1];
+    // 主音量压低：桌面设备，提示音不该吓人
+    int32_t s = (int32_t)(v * 0.55f * 32767.0f);
+    if (s > 32767) s = 32767;
+    if (s < -32768) s = -32768;
+    s_block[idx++] = (int16_t)s;
+    s_block[idx++] = (int16_t)s;
     if (idx >= kBlockFrames * 2) {
       size_t written = 0;
       i2s_write(I2S_NUM_0, s_block, sizeof(s_block), &written, portMAX_DELAY);
@@ -105,7 +217,7 @@ void audioTask(void*) {
   for (;;) {
     uint8_t kind = 0;
     if (xQueueReceive(s_queue, &kind, portMAX_DELAY) != pdTRUE) continue;
-    if (!s_ok || s_mode == DP_SND_OFF || kind == DP_SND_OFF) continue;
+    if (!s_ok || kind == DP_SND_OFF) continue;
     playBlocking(kind);
   }
 }
@@ -153,18 +265,43 @@ bool codecUp() {
   return true;
 }
 
-uint8_t loadMode() {
+void saveSlot(const char* key, uint8_t v) {
+  Preferences p;
+  p.begin("deskpulse", false);
+  p.putUChar(key, v);
+  p.end();
+}
+
+// 读两个槽。旧版本只有一个 "snd"（其中 3 表示"水滴+海浪"），这里做一次迁移。
+void loadSlots() {
   Preferences p;
   p.begin("deskpulse", true);
-  const uint8_t v = (uint8_t)p.getUChar("snd", DP_SND_BOTH);
+  if (p.isKey("sndA")) {
+    s_alert = p.getUChar("sndA", DP_SND_DROP);
+    s_done = p.getUChar("sndD", DP_SND_WAVE);
+  } else {
+    const uint8_t legacy = p.getUChar("snd", 3);  // 旧默认 = 水滴+海浪
+    if (legacy == 3) {
+      s_alert = DP_SND_DROP;
+      s_done = DP_SND_WAVE;
+    } else {
+      s_alert = legacy;
+      s_done = legacy;
+    }
+  }
   p.end();
-  return v > DP_SND_BOTH ? DP_SND_BOTH : v;
+  if (s_alert >= DP_SND_COUNT) s_alert = DP_SND_DROP;
+  if (s_done >= DP_SND_COUNT) s_done = DP_SND_WAVE;
+
+  // 写回新键，下次就不用再迁移
+  saveSlot("sndA", s_alert);
+  saveSlot("sndD", s_done);
 }
 
 }  // namespace
 
 bool audioInit() {
-  s_mode = loadMode();
+  loadSlots();
 
   // 功放使能先拉高：NS4150B 的 CTRL 脚，拉高才出声
   pinMode(AUDIO_PA, OUTPUT);
@@ -185,23 +322,27 @@ bool audioInit() {
     return false;
   }
   s_ok = true;
-  Serial.printf("[dp] audio=ES8311 ok, mode=%s\n", audioModeLabel(s_mode));
+  Serial.printf("[dp] audio=ES8311 ok, alert=%s done=%s\n", audioModeLabel(s_alert),
+                audioModeLabel(s_done));
   return true;
 }
 
-uint8_t audioMode() { return s_mode; }
+uint8_t audioAlertMode() { return s_alert; }
+uint8_t audioDoneMode() { return s_done; }
 
-void audioSetMode(uint8_t mode) {
-  s_mode = mode > DP_SND_BOTH ? DP_SND_BOTH : mode;
-  Preferences p;
-  p.begin("deskpulse", false);
-  p.putUChar("snd", s_mode);
-  p.end();
+void audioSetAlertMode(uint8_t mode) {
+  s_alert = mode >= DP_SND_COUNT ? DP_SND_OFF : mode;
+  saveSlot("sndA", s_alert);
 }
 
-uint8_t audioCycleMode() {
-  audioSetMode((uint8_t)((s_mode + 1) % 4));
-  return s_mode;
+void audioSetDoneMode(uint8_t mode) {
+  s_done = mode >= DP_SND_COUNT ? DP_SND_OFF : mode;
+  saveSlot("sndD", s_done);
+}
+
+uint8_t audioCycleAlert() {
+  audioSetAlertMode((uint8_t)((s_alert + 1) % DP_SND_COUNT));
+  return s_alert;
 }
 
 void audioPlay(uint8_t kind) {
@@ -210,27 +351,27 @@ void audioPlay(uint8_t kind) {
 }
 
 void audioPlayEvent(bool complete) {
-  switch (s_mode) {
-    case DP_SND_DROP:
-      audioPlay(DP_SND_DROP);
-      break;
-    case DP_SND_WAVE:
-      audioPlay(DP_SND_WAVE);
-      break;
-    case DP_SND_BOTH:
-      // 弹窗用水滴（短促、催你）、完成用海浪（舒展、收尾）
-      audioPlay(complete ? DP_SND_WAVE : DP_SND_DROP);
-      break;
-    default:
-      break;  // 关
-  }
+  audioPlay(complete ? s_done : s_alert);
 }
 
 const char* audioModeLabel(uint8_t mode) {
   switch (mode) {
     case DP_SND_DROP: return "水滴";
     case DP_SND_WAVE: return "海浪";
-    case DP_SND_BOTH: return "水滴+海浪";
+    case DP_SND_BUBBLE: return "气泡";
+    case DP_SND_XYLO: return "木琴";
+    case DP_SND_HARP: return "竖琴";
+    case DP_SND_SOFTBELL: return "软铃";
+    case DP_SND_PIANO: return "钢琴";
+    case DP_SND_MARIMBA: return "马林巴";
+    case DP_SND_MUSICBOX: return "八音盒";
+    case DP_SND_CHIME: return "风铃";
     default: return "关";
   }
+}
+
+const char* audioPairLabel() {
+  static char buf[24];
+  snprintf(buf, sizeof(buf), "%s / %s", audioModeLabel(s_alert), audioModeLabel(s_done));
+  return buf;
 }

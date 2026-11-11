@@ -91,7 +91,7 @@ static void render() {
   in.rotation = displayRotation();
   in.rotOffset = imuOffset();
   in.imuOk = imuReady();
-  in.sound = audioModeLabel(audioMode());
+  in.sound = audioPairLabel();
 
   uiRender(gCanvas, in);
   displayPush(gCanvas.buffer());
@@ -346,10 +346,10 @@ void loop() {
 
   // PLUS 长按：切提示音（关 → 水滴 → 海浪 → 水滴+海浪），切完立刻试听一声
   if (userLong) {
-    const uint8_t m = audioCycleMode();
-    audioPlayEvent(true);
+    const uint8_t m = audioCycleAlert();
+    audioPlay(m);  // 立刻试听这一档（"关"自然就没声）
     gDirty = true;
-    Serial.printf("[dp] sound mode -> %s\n", audioModeLabel(m));
+    Serial.printf("[dp] sound alert -> %s\n", audioModeLabel(m));
   }
 
   // PWR 分两档，都不受"屏幕是否已熄"影响 —— 关机键必须随时有效。

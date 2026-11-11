@@ -94,9 +94,10 @@ button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:10px;backg
 <label>Wi-Fi 密码</label><input name="pass" type="password">
 <label>电脑地址（可留空，自动发现）</label><input name="host" placeholder="192.168.1.10">
 <label>访问令牌（可留空；需与电脑端 config.json 的 authToken 一致）</label><input name="token" placeholder="可选">
-<label>提示音（弹窗 / 任务完成时）</label>
-<select name="snd"><option value="">保持不变</option><option value="0">关</option>
-<option value="1">水滴</option><option value="2">海浪</option><option value="3">水滴 + 海浪</option></select>
+<label>弹窗提示音（Agent 等你确认时）</label>
+<select name="sndA"><option value="">保持不变</option><option value="0">关</option><option value="1">水滴</option><option value="2">海浪</option><option value="3">气泡</option><option value="4">木琴</option><option value="5">竖琴</option><option value="6">软铃</option><option value="7">钢琴</option><option value="8">马林巴</option><option value="9">八音盒</option><option value="10">风铃</option></select>
+<label>完成提示音（任务做完时）</label>
+<select name="sndD"><option value="">保持不变</option><option value="0">关</option><option value="1">水滴</option><option value="2">海浪</option><option value="3">气泡</option><option value="4">木琴</option><option value="5">竖琴</option><option value="6">软铃</option><option value="7">钢琴</option><option value="8">马林巴</option><option value="9">八音盒</option><option value="10">风铃</option></select>
 <button type="submit">保存并重启</button></form></html>)HTML";
 
 void startConfigPortal() {
@@ -126,8 +127,10 @@ void startConfigPortal() {
     String token = s_server->arg("token");
     token.toCharArray(s_token, sizeof(s_token));
     // 提示音：留空表示"保持不变"，避免只改 Wi-Fi 时把设备上用 PLUS 键选的音效覆盖掉
-    String snd = s_server->arg("snd");
-    if (snd.length()) audioSetMode((uint8_t)snd.toInt());
+    String sndA = s_server->arg("sndA");
+    if (sndA.length()) audioSetAlertMode((uint8_t)sndA.toInt());
+    String sndD = s_server->arg("sndD");
+    if (sndD.length()) audioSetDoneMode((uint8_t)sndD.toInt());
     saveConfig(ssid, pass, host, 8787);
     s_server->send(200, "text/html; charset=utf-8",
                    "<meta charset=utf-8><body style='font-family:sans-serif;padding:24px'>"

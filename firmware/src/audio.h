@@ -1,34 +1,50 @@
 // 提示音：ES8311 DAC + NS4150B 功放，走 I2S 输出。
 //
-// 两种音效都是**代码合成**的，不打包 WAV：
-//   · 水滴：音高快速上滑的正弦（700→1600Hz）+ 指数衰减，短促清脆 = "有事找你"
-//   · 海浪：低通白噪声 + 慢起慢落包络，柔和收尾 = "做完了"
-// 好处是不占 flash、参数随时能调；代价是每帧都要算，所以放在独立任务里。
+// 所有音效都是**代码合成**的，不打包 WAV：
+//   · 打击类（木琴/马林巴/钢琴/竖琴/软铃/八音盒）用「基频 + 分音表」叠加，
+//     每个分音有自己的幅度和衰减时间常数 —— 这正是真实乐器音色的主要差别：
+//     木琴的高次分音衰减极快（叮），钢琴的衰减慢且有二三次谐波（厚），
+//     八音盒几乎是纯高频金属音（脆）。
+//   · 水滴/气泡用扫频，海浪用低通噪声，轻风铃是多声错开敲击。
+// 好处是不占 flash、每个参数都能按听感调；代价是每帧要算，所以放独立任务里。
 #pragma once
 #include <stdint.h>
 
 enum : uint8_t {
-  DP_SND_OFF = 0,   // 不响
-  DP_SND_DROP = 1,  // 两种事件都用水滴
-  DP_SND_WAVE = 2,  // 两种事件都用海浪
-  DP_SND_BOTH = 3,  // 弹窗用水滴、完成用海浪（默认）
+  DP_SND_OFF = 0,       // 不响
+  DP_SND_DROP = 1,      // 水滴
+  DP_SND_WAVE = 2,      // 海浪
+  DP_SND_BUBBLE = 3,    // 气泡
+  DP_SND_XYLO = 4,      // 木琴
+  DP_SND_HARP = 5,      // 竖琴
+  DP_SND_SOFTBELL = 6,  // 软铃
+  DP_SND_PIANO = 7,     // 钢琴单音
+  DP_SND_MARIMBA = 8,   // 马林巴
+  DP_SND_MUSICBOX = 9,  // 八音盒
+  DP_SND_CHIME = 10,    // 轻风铃
+  DP_SND_COUNT = 11,
 };
 
-// 初始化 I2S + ES8311。失败只打日志、不阻塞启动：后续 play 全是空操作，
-// 屏幕/网络/按键照常工作（音频是锦上添花，不能因为它起不来就黑屏）。
+// 初始化 I2S + ES8311。失败只打日志、不阻塞启动：后续 play 全是空操作。
 bool audioInit();
 
-// 当前音效，持久化在 NVS
-uint8_t audioMode();
-void audioSetMode(uint8_t mode);
-// 0→1→2→3→0 循环，返回切换后的值
-uint8_t audioCycleMode();
+// 两个事件各有一个音效槽（0 = 关）：
+//   alert = 进 WAIT（弹窗/等确认），done = 进 DONE（任务完成）
+uint8_t audioAlertMode();
+uint8_t audioDoneMode();
+void audioSetAlertMode(uint8_t mode);
+void audioSetDoneMode(uint8_t mode);
+// alert 槽 0→1→…→10→0 循环，返回切换后的值
+uint8_t audioCycleAlert();
 
-// 异步播放（投进队列就返回，不阻塞主循环）
+// 异步播放指定音效（投进队列就返回，不阻塞主循环）
 void audioPlay(uint8_t kind);
 
-// 按事件播：complete=false（弹窗/等确认）complete=true（任务完成）
+// 按事件播：complete=false 播 alert 槽，true 播 done 槽
 void audioPlayEvent(bool complete);
 
-// 给界面/配网页显示用："关" / "水滴" / "海浪" / "水滴+海浪"
+// 界面/配网页显示用："水滴" / "木琴" / "关" …
 const char* audioModeLabel(uint8_t mode);
+
+// "水滴 / 海浪" 这种合并标签，给信息页一行显示用（静态缓冲，别长期持有）
+const char* audioPairLabel();
