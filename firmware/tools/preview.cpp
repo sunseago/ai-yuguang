@@ -177,6 +177,23 @@ int main() {
   uiRender(gCanvas, in);
   writePPM("preview_await_steady.ppm", gBuf);
 
-  printf("wrote 8 previews\n");
+  // 第十~十二张：完成(DONE)的绿色闪烁 —— 亮 / 暗 / 过了 10 秒常亮。
+  // 和 WAIT 那三张对照着看，确认两种闪烁只差颜色、节奏一致。
+  m.items[0].state = DP_ST_DONE;
+  m.items[0].stateSinceMs = tOn;
+  in.nowMs = tOn;         // 亮相位
+  uiRender(gCanvas, in);
+  writePPM("preview_done_on.ppm", gBuf);
+
+  in.nowMs = tOn + 500;   // 暗相位
+  uiRender(gCanvas, in);
+  writePPM("preview_done_off.ppm", gBuf);
+
+  m.items[0].stateSinceMs = tOn - 12000;  // 超过 10 秒窗口 -> 常亮
+  in.nowMs = tOn + 500;                   // 故意取暗相位，验证常亮压过闪烁
+  uiRender(gCanvas, in);
+  writePPM("preview_done_steady.ppm", gBuf);
+
+  printf("wrote 11 previews\n");
   return 0;
 }

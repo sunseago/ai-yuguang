@@ -22,7 +22,16 @@ constexpr int kBarY = 18;
 // 红了半小时还在晃，人会开始主动无视它——那比不提醒更糟。
 // 闪 30 秒足够把注意力拉过来，之后转常亮表示"还等着呢，但你不用被它催"。
 constexpr uint64_t kAwaitBlinkMs = 30000;
+// 完成只闪 10 秒：那是"报喜"，闪太久会变成噪音；等确认才需要一直催。
+constexpr uint64_t kDoneFlashMs = 10000;
 constexpr uint64_t kBlinkHalfMs = 500;   // 1 Hz：亮 0.5s、暗 0.5s
+
+// 某个状态要闪多久（0 = 不闪）
+uint64_t flashWindowMs(uint8_t st) {
+  if (st == DP_ST_AWAITING) return kAwaitBlinkMs;
+  if (st == DP_ST_DONE) return kDoneFlashMs;
+  return 0;
+}
 
 uint16_t healthColor(uint8_t h) {
   switch (h) {
@@ -54,7 +63,8 @@ BadgeStyle badgeStyle(uint8_t s, bool lit = true) {
       return lit ? BadgeStyle{dpcolor::RUN, dpcolor::WHITE}
                  : BadgeStyle{dpcolor::RUN_SOFT, dpcolor::RUN};
     case DP_ST_DONE:
-      return {dpcolor::DONE, dpcolor::WHITE};
+      return lit ? BadgeStyle{dpcolor::DONE, dpcolor::WHITE}
+                 : BadgeStyle{dpcolor::DONE_SOFT, dpcolor::DONE};
     case DP_ST_ERROR:
       return {dpcolor::ERR, dpcolor::WHITE};
     case DP_ST_OFFLINE:
@@ -70,9 +80,11 @@ uint64_t stateAgeMs(const DpProvider& p, uint64_t nowMs) {
   return nowMs > p.stateSinceMs ? nowMs - p.stateSinceMs : 0;
 }
 
-// 此刻该"亮"还是"暗"。超过 30 秒恒亮。
-bool awaitingLit(const DpProvider& p, uint64_t nowMs) {
-  if (stateAgeMs(p, nowMs) >= kAwaitBlinkMs) return true;
+// 此刻该"亮"还是"暗"。过了各自的窗口就恒亮。
+bool stateLit(const DpProvider& p, uint64_t nowMs, uint8_t st) {
+  const uint64_t win = flashWindowMs(st);
+  if (!win) return true;
+  if (stateAgeMs(p, nowMs) >= win) return true;
   return ((nowMs / kBlinkHalfMs) & 1ULL) == 0;
 }
 
@@ -155,14 +167,16 @@ void quotaLine(const DpProvider& p, char* prefix, size_t prefixN, char* big, siz
 
 void drawCard(Canvas& c, const DpProvider& p, int y, bool highlight, uint64_t nowMs,
               uint8_t st) {
-  // 等确认时整张卡的描边也一起呼吸，和胶囊同步 —— 余光扫过去先看到的是边框在跳
-  const bool awaiting = (st == DP_ST_AWAITING);
-  const bool lit = awaiting ? awaitingLit(p, nowMs) : true;
-  const uint16_t edge = awaiting ? (lit ? dpcolor::RUN : dpcolor::RUN_SOFT) : dpcolor::LINE;
+  // 等确认（红）和刚完成（绿）时，整张卡的描边跟胶囊同步闪 —— 余光扫过去先看到边框在跳
+  const bool flashing = (st == DP_ST_AWAITING || st == DP_ST_DONE);
+  const bool lit = flashing ? stateLit(p, nowMs, st) : true;
+  uint16_t edge = dpcolor::LINE;
+  if (st == DP_ST_AWAITING) edge = lit ? dpcolor::RUN : dpcolor::RUN_MID;
+  else if (st == DP_ST_DONE) edge = lit ? dpcolor::DONE : dpcolor::DONE_MID;
   const uint16_t fill = highlight ? dpRGB(0xEC, 0xF1, 0xF9) : dpcolor::CARD;
 
   c.roundRect(kCardX, y, kCardW, kCardH, 8, edge, fill);
-  if (awaiting) {
+  if (flashing) {
     // 再套一道内圈凑成 2px：1px 的线在 240 像素的屏上几乎看不见
     c.roundRect(kCardX + 1, y + 1, kCardW - 2, kCardH - 2, 7, edge, fill);
   }
@@ -258,7 +272,7 @@ void detail(Canvas& c, const UiInput& in) {
 
   // 状态胶囊（放大一档），耗时跟着标签右边自适应，避免长标签压到时间上
   const uint8_t st = in.model->bridgeOnline ? p.state : DP_ST_OFFLINE;
-  const int bw = drawStateBadge(c, 10, 42, st, 2);
+  const int bw = drawStateBadge(c, 10, 42, st, 2, stateLit(p, in.nowMs, st));
 
   char dur[16] = "";
   // 断链时"已经持续多久"无从得知，干脆不显示，免得那个数字还在自己涨
@@ -484,8 +498,9 @@ int uiHitCard(const DpModel& m, int x, int y) {
 bool uiWantsFastRedraw(const DpModel& m, uint64_t nowMs) {
   if (!m.bridgeOnline) return false;
   for (int i = 0; i < m.count && i < 3; i++) {
-    if (m.items[i].state != DP_ST_AWAITING) continue;
-    if (stateAgeMs(m.items[i], nowMs) < kAwaitBlinkMs) return true;
+    const uint64_t win = flashWindowMs(m.items[i].state);
+    if (!win) continue;
+    if (stateAgeMs(m.items[i], nowMs) < win) return true;   // 还在闪的窗口里
   }
   return false;
 }

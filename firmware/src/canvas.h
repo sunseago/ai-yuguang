@@ -30,6 +30,10 @@ constexpr uint16_t ERR = dpRGB(0xEF, 0x44, 0x44);
 constexpr uint16_t RUN = dpRGB(0xDC, 0x35, 0x35);
 constexpr uint16_t RUN_SOFT = dpRGB(0xFD, 0xEC, 0xEC);  // 淡红底，给浅色场景用
 constexpr uint16_t DONE_SOFT = dpRGB(0xE7, 0xF8, 0xF1);
+// 闪烁的"暗相"边框不能直接用 *_SOFT：那在白卡上几乎等于消失，
+// 看起来是"闪没了"而不是"变暗"。用中间调，暗相仍能看出边界。
+constexpr uint16_t RUN_MID = dpRGB(0xF7, 0xC5, 0xC5);
+constexpr uint16_t DONE_MID = dpRGB(0xA6, 0xE3, 0xCC);
 constexpr uint16_t WHITE = 0xFFFF;
 constexpr uint16_t DARKPANEL = dpRGB(0x11, 0x14, 0x1A);
 }  // namespace dpcolor

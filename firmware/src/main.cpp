@@ -472,9 +472,10 @@ void loop() {
     gDirty = true;
   }
 
-  // 平时 1 秒一帧就够（走表、心跳）。有卡片在"等确认"呼吸时提到 250ms——
-  // 1 Hz 的闪烁如果按 1 秒刷新，会变成一顿一顿的，看不出是"呼吸"。
-  const uint32_t frameMs = uiWantsFastRedraw(gModel, bridgeNowMs()) ? 250 : 1000;
+  // 平时 1 秒一帧就够（走表、心跳）。有卡片在闪时提到 120ms：
+  // 1 Hz 闪烁的半周期是 500ms，250ms 一帧只有 2 帧，边沿会抖成"长短不一"；
+  // 120ms 一帧每个半周期约 4 帧，节奏才稳。
+  const uint32_t frameMs = uiWantsFastRedraw(gModel, bridgeNowMs()) ? 120 : 1000;
   if (gDirty || now - gLastRender > frameMs) {
     gDirty = false;
     render();
