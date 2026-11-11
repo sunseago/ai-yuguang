@@ -70,7 +70,7 @@ Kimi(余额 API + 进程)   ┘
 
 ### 0. 装成 Mac App（推荐，不用管终端）
 
-`package/dist/AI余光-0.1.8.zip` 是可直接双击的菜单栏 App，**自带 node 运行时**，
+`package/dist/AI余光-0.1.9.zip` 是可直接双击的菜单栏 App，**自带 node 运行时**，
 不需要本机装 Node，也不依赖 WorkBuddy 是否开着。
 
 ```bash
@@ -216,10 +216,10 @@ cp config.json config.local.json && chmod 600 config.local.json
 pip install esptool
 # LCD-1.54（240×240）
 esptool.py --chip esp32s3 -p /dev/cu.usbmodem101 -b 460800 \
-  write_flash 0x0 AIYuguang-0.1.8-waveshare-lcd-154.bin
+  write_flash 0x0 AIYuguang-0.1.9-waveshare-lcd-154.bin
 # AMOLED-2.16（480×480）
 esptool.py --chip esp32s3 -p /dev/cu.usbmodem101 -b 460800 \
-  write_flash 0x0 AIYuguang-0.1.8-waveshare-amoled-216.bin
+  write_flash 0x0 AIYuguang-0.1.9-waveshare-amoled-216.bin
 ```
 
 **按板子选一个文件**，别烧错：两块板的引脚和屏幕驱动完全不同。
