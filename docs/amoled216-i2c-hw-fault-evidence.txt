@@ -1,185 +1,117 @@
 AI余光 · Waveshare ESP32-S3-Touch-AMOLED-2.16 · I2C 硬件故障证据
-============================================================
+================================================================
 
 板卡：Waveshare ESP32-S3-Touch-AMOLED-2.16（SKU 33969）
-现象：屏幕（CO5300 / QSPI）正常显示，但 I2C 总线（GPIO15=SDA, GPIO14=SCL）
-      上所有器件——AXP2101(0x34)、CST9220 触摸(0x5A)、QMI8658(0x6B)、
-      PCF85063 RTC(0x51)、ES8311 音频(0x18)——全部无应答。触摸与陀螺仪因此不可用。
+日期：2026-11-11
 
-实测定位（均带对照组）：
-  1. 6 组引脚对 + 12kHz 位翻转扫描：0 器件，排除接错脚/上拉太弱
-  2. 最小探针（不初始化屏幕、不加载库）：同样 0 器件，排除应用固件影响
-  3. 推挽拉低 SDA，ADC 读 SCL = 204mV；反向 208mV；对照引脚无耦合
-     => 两线间约 140Ω 低阻通路。若为未上电器件的 ESD 二极管钳位，
-        读数应在 0.6~1.4V，实测 0.2V，故排除该可能
-  4. 原理图：R21/R22 = 2.2k 上拉至 VCC3V3（与 140Ω 反推一致，VCC3V3 正常）
-     触摸 I2C 经 J4 24pin 屏排线，pin19=TP_SDA、pin20=TP_SCL，为相邻脚
-     板上无 I2C 专用 ESD 器件（仅 USB 有 TVS1），排除保护器件击穿
-  5. 断电（拔电池）后依旧短接，不随时间/上电状态恢复
+现象
+----
+屏幕（CO5300 / QSPI，GPIO 4/5/6/7/38/12/39）工作正常，能正常显示画面；
+但 I2C 总线（GPIO15 = SDA，GPIO14 = SCL）上**所有**器件均无应答：
 
-结论：SDA/SCL 之间存在约 140Ω 硬件搭连，三条官方固件在同一块板上全部卡在 I2C，
-      与本仓库固件无关，属板卡硬件故障。
+    AXP2101  电源管理   0x34
+    CST9220  触摸       0x5A
+    QMI8658  六轴 IMU   0x6B
+    PCF85063 RTC        0x51
+    ES8311   音频 codec 0x18
 
-------------------------------------------------------------
-证据一：官方出厂恢复镜像 firmware/ESP32-S3-Touch-AMOLED-2.16-FactoryOnly-260318.bin
-        （ESP-IDF v5.5.2，烧录至 0x0）
-------------------------------------------------------------
-0 0x40384081:0x3fcb3470 0x4038d08d:0x3fcb3490 0x42013485:0x3fcb3ESP-ROM:esp32s3-20210327
-Build:Mar 27 2021
-rst:0x15 (USB_UART_CHIP_RESET),boot:0x2b (SPI_FAST_FLASH_BOOT)
-Saved PC:0x40380a0e
-SPIWP:0xee
-mode:DIO, clock div:1
-load:0x3fce2820,len:0x540
-load:0x403c8700,len:0xbc8
-load:0x403cb700,len:0x2934
-entry 0x403c8894
-I (880) octal_psram: vendor id    : 0x0d (AP)
-I (880) octal_psram: dev id       : 0x02 (generation 3)
-I (880) octal_psram: density      : 0x03 (64 Mbit)
-I (881) octal_psram: good-die     : 0x01 (Pass)
-I (881) octal_psram: Latency      : 0x01 (Fixed)
-I (881) octal_psram: VCC          : 0x01 (3V)
-I (881) octal_psram: SRF          : 0x01 (Fast Refresh)
-I (882) octal_psram: BurstType    : 0x01 (Hybrid Wrap)
-I (882) octal_psram: BurstLen     : 0x01 (32 Byte)
-I (882) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)
-I (882) octal_psram: DriveStrength: 0x00 (1/1)
-I (883) MSPI Timing: Enter psram timing tuning
-I (884) esp_psram: Found 8MB PSRAM device
-I (884) esp_psram: Speed: 80MHz
-I (1158) mmu_psram: Read only data copied and mapped to SPIRAM
-I (1274) mmu_psram: Instructions copied and mapped to SPIRAM
-I (1274) cpu_start: Multicore app
-I (1426) esp_psram: SPI SRAM memory test OK
-I (1435) cpu_start: GPIO 44 and 43 are used as console UART I/O pins
-I (1435) cpu_start: Pro cpu start user code
-I (1435) cpu_start: cpu freq: 240000000 Hz
-I (1435) app_init: Application information:
-I (1436) app_init: Project name:     phone_s3_lcd_ev_board
-I (1436) app_init: App version:      1
-I (1436) app_init: Compile time:     Mar 18 2026 15:02:27
-I (1436) app_init: ELF file SHA256:  120dbc1fa...
-I (1436) app_init: ESP-IDF:          v5.5.2
-I (1437) efuse_init: Min chip rev:     v0.0
-I (1437) efuse_init: Max chip rev:     v0.99 
-I (1437) efuse_init: Chip rev:         v0.2
-I (1437) heap_init: Initializing. RAM available for dynamic allocation:
-I (1438) heap_init: At 3FCB0128 len 000395E8 (229 KiB): RAM
-I (1438) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
-I (1438) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
-I (1439) heap_init: At 600FE000 len 00001FE8 (7 KiB): RTCRAM
-I (1439) esp_psram: Adding pool of 3008K of PSRAM memory to heap allocator
-I (1439) esp_psram: Adding pool of 50K of PSRAM memory gap generated due to end address alignment of drom to the heap allocator
-I (1440) spi_flash: detected chip: generic
-I (1440) spi_flash: flash io: qio
-I (1441) sleep_gpio: Configure to isolate all GPIO pins in sleep state
-I (1441) sleep_gpio: Enable automatic switching of GPIO sleep configuration
-I (1442) main_task: Started on CPU0
-I (1443) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
-I (1443) main_task: Calling app_main()
-I (1444) Main: Switch to partition factory
-I (1444) esp_image: segment 0: paddr=00020020 vaddr=3c170020 size=3935f4h (3749364) map
-I (1698) esp_image: segment 1: paddr=003b361c vaddr=3fca3700 size=06908h ( 26888) 
-I (1701) esp_image: segment 2: paddr=003b9f2c vaddr=40374000 size=060ech ( 24812) 
-I (1703) esp_image: segment 3: paddr=003c0020 vaddr=42000020 size=16f510h (1504528) map
-I (1805) esp_image: segment 4: paddr=0052f538 vaddr=4037a0ec size=19584h (103812) 
-I (1812) esp_image: segment 5: paddr=00548ac4 vaddr=50000000 size=00020h (    32) 
-I (1904) ESP32-S3-Touch-AMOLED-2.16: Partition size: total: 2884241, used: 795419
-I (1904) Main: SPIFFS mount successfully
-W (1904) i2c.master: Please check pull-up resistances whether be connected properly. Otherwise unexpected behavior would happen. For more detailed information, please read docs
-E (2006) I2C_If: Fail to write to dev 30
-E (2106) I2C_If: Fail to write to dev 30
-E (2206) I2C_If: Fail to write to dev 30
-E (2306) I2C_If: Fail to write to dev 30
-E (2406) I2C_If: Fail to write to dev 30
-E (2506) I2C_If: Fail to write to dev 30
-E (2606) I2C_If: Fail to write to dev 30
-E (2706) I2C_If: Fail to write to dev 30
-E (2806) I2C_If: Fail to write to dev 30
-E (2906) I2C_If: Fail to write to dev 30
-E (3006) I2C_If: Fail to write to dev 30
-E (3106) I2C_If: Fail to write to dev 30
-E (3206) I2C_If: Fail to write to dev 30
-E (3306) I2C_If: Fail to read from dev 30
-I (3306) ES8311: Work in Slave mode
-E (3406) I2C_If: Fail to write to dev 30
-E (3506) I2C_If: Fail to write to dev 30
-E (3606) I2C_If: Fail to read from dev 30
-E (3706) I2C_If: Fail to write to dev 30
-E (3806) I2C_If: Fail to write to dev 30
-E (3906) I2C_If: Fail to write to dev 30
-E (4006) I2C_If: Fail to write to dev 30
-E (4106) I2C_If: Fail to write to dev 30
-E (4106) ES8311: Open fail
-assert failed: bsp_audio_codec_speaker_init esp32_s3_touch_amoled_2_16.c:292 (es8311_dev)
-Backtrace: 0x403840b5:0x3fcb3450 0x40384081:0x3fcb3470 0x4038d08d:0x3fcb3490 0x42013485:0x3fcb35b0 0x42013b30:0x3fcb3620 0x420118f8:0x3fcb3640 0x4216e573:0x3fcb36d0
-ELF file SHA256: 120dbc1fa
-Rebooting...
+后果：触摸失效、陀螺仪（自动转屏）不可用、电池电压与充电状态读不到。
 
-------------------------------------------------------------
-证据二：v2.5.0_waveshare-esp32-s3-touch-amoled-2.16（小智 xiaozhi，ESP-IDF v6.1）
-        merged-binary.bin，烧录至 0x0；9 秒内重启 24 次
-------------------------------------------------------------
-ESP-ROM:esp32s3-20210327
-Build:Mar 27 2021
-rst:0x15 (USB_UART_CHIP_RESET),boot:0x2b (SPI_FAST_FLASH_BOOT)
-Saved PC:0x421dc5c3
-SPIWP:0xee
-mode:DIO, clock div:1
-load:0x3fce2820,len:0x544
-load:0x403c8700,len:0xd14
-load:0x403cb700,len:0x2eb4
-entry 0x403c88f4
-I (34) octal_psram: vendor id    : 0x0d (AP)
-I (34) octal_psram: dev id       : 0x02 (generation 3)
-I (34) octal_psram: density      : 0x03 (64 Mbit)
-I (36) octal_psram: good-die     : 0x01 (Pass)
-I (40) octal_psram: Latency      : 0x01 (Fixed)
-I (44) octal_psram: VCC          : 0x01 (3V)
-I (48) octal_psram: SRF          : 0x01 (Fast Refresh)
-I (53) octal_psram: BurstType    : 0x01 (Hybrid Wrap)
-I (58) octal_psram: BurstLen     : 0x01 (32 Byte)
-I (62) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)
-I (67) octal_psram: DriveStrength: 0x00 (1/1)
-I (71) MSPI Timing: Enter psram timing tuning
-I (76) esp_psram: Found 8MB PSRAM device
-I (79) esp_psram: Speed: 80MHz
-I (82) cpu_start: Multicore app
-I (96) cpu_start: GPIO 44 and 43 are used as console UART I/O pins
-I (96) cpu_start: Pro cpu start user code
-I (97) cpu_start: cpu freq: 240000000 Hz
-I (98) app_init: Application information:
-I (102) app_init: Project name:     xiaozhi
-I (106) app_init: App version:      2.5.0
-I (109) app_init: Compile time:     Sep 10 2026 08:29:48
-I (114) app_init: ELF file SHA256:  423b336b3...
-I (119) app_init: ESP-IDF:          v6.1
-I (122) efuse_init: Min chip rev:     v0.0
-I (126) efuse_init: Max chip rev:     v0.99 
-I (130) efuse_init: Chip rev:         v0.2
-I (134) heap_init: Initializing. RAM available for dynamic allocation:
-I (140) heap_init: At 3FCAB230 len 0003E4E0 (249 KiB): RAM
-I (146) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
-I (151) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
-I (156) heap_init: At 600FE000 len 00001FD8 (7 KiB): RTCRAM
-I (161) esp_psram: Adding pool of 8192K of PSRAM memory to heap allocator
-I (168) spi_flash: detected chip: generic
-I (171) spi_flash: flash io: qio
-I (175) sleep_gpio: Configure to isolate all GPIO pins in sleep state
-I (181) sleep_gpio: Enable automatic switching of GPIO sleep configuration
-I (188) main_task: Started on CPU0
-I (188) esp_psram: Reserving pool of 100K of internal memory for DMA/internal allocations
-I (198) main_task: Calling app_main()
-I (208) Board: UUID=c799852e-c5b9-48d7-a48b-fe7982371db7 SKU=esp32-s3-touch-amoled-2.16
-I (208) button: IoT Button Version: 4.2.1
-I (218) PowerSaveTimer: Power save timer enabled
-I (218) WaveshareEsp32s3TouchAMOLED2inch16: Init AXP2101
-ESP_ERROR_CHECK failed: esp_err_t 0x108 (ESP_ERR_INVALID_RESPONSE) at 0x420266e4
-file: "./main/boards/common/i2c_device.cc" line 27
-func: void I2cDevice::WriteReg(uint8_t, uint8_t)
-expression: i2c_master_transmit(i2c_device_, buffer, 2, 100)
-abort() was called at PC 0x40385b36 on core 0
-Backtrace: 0x40385b75:0x3fcaf5b0 0x40385b41:0x3fcaf5d0 0x40384693:0x3fcaf5f0 0x40385b36:0x3fcaf660 0x420266e4:0x3fcaf690 0x42026d3e:0x3fcaf6c0 0x4202709d:0x3fcaf6e0 0x42027202:0x3fcaf780 0x42019323:0x3fcaf7a0 0x4201f463:0x3fcaf7c0 0x42024d6e:0x3fcaf860 0x42009683:0x3fcaf880
-ELF file SHA256: 423b336b3
-Rebooting...
+实测定位（每一步都有对照组）
+----------------------------
+1. 引脚定义核对 —— 与微雪官方文档 / 官方示例一致：
+   SDA=GPIO15、SCL=GPIO14、TP_RST=GPIO40、TP_INT=GPIO11。
+   另试 6 组候选引脚对（含 SDA/SCL 互换），全部 0 器件。排除接错脚。
+
+2. 速度相关排除 —— 绕开 ESP32 的 I2C 外设，用 GPIO 位翻转扫描全地址
+   （0x08~0x77），时钟降到 ~12kHz（弱上拉也能跑通），仍然 0 器件。
+   排除"上拉太弱 / 速度快"。
+
+3. 应用固件排除 —— 写了一个最小探针（只 Wire.begin + 扫地址，
+   不初始化屏幕、不加载任何库），结果同样是 0 器件。
+
+4. 总线是否被从机按住 —— 空闲时在"无内部上拉"和"有内部上拉"两种情况下
+   都读到 SDA=1 / SCL=1，未被拉死。
+
+5. 短路判定（关键）—— 推挽把 SDA 拉低，用 ADC 读 SCL 的实际电压：
+
+       SDA 拉低 -> SCL 读到 204mV (raw 228)
+       SCL 拉低 -> SDA 读到 208mV (raw 229)
+       对照：GP17 拉低 -> GP18 读到 4095（无耦合，测量方法可信）
+
+   两线之间存在 ~140Ω 的低阻通路。
+   若只是"总线上有未上电器件、其 ESD 二极管把两线经共同 VDD 钳位"，
+   被拉的那根应停在 0.6~1.4V（一个 PN 结压降）；实测仅 0.2V，故排除该可能。
+
+6. 供电排除 —— 拔掉电池、仅 USB 供电、重新上电后依旧短接；
+   30 秒内 600 次采样全部导通，从未出现瞬时恢复（不是接触不良的抖动）。
+
+7. 原理图核对（schematic/ESP32-S3-Touch-AMOLED-2.16-Schematic.pdf）：
+   · R21 / R22 = 2.2k 上拉至 VCC3V3（ESP32_SCL / ESP32_SDA），
+     与 140Ω 反推一致，同时说明 VCC3V3 正常（否则上拉不存在）。
+   · 触摸 I2C 经 J4（24pin 屏排线）走到屏体：pin18=TP_RESET、
+     **pin19=TP_SDA、pin20=TP_SCL（相邻两脚）**、pin21=QSPI_SI2。
+   · 板上没有 I2C 专用 ESD/TVS 器件（只有 USB 上的 TVS1 = LTVS16H5.0ET5G），
+     排除"保护器件击穿"。
+
+结论
+----
+SDA 与 SCL 之间存在约 140Ω 的硬件搭连。两线短接时 I2C 物理上无法完成任何
+一次合法传输，因此全部从机同时"消失"，而走 QSPI 的屏幕不受影响。
+断电无法恢复，固件无法绕过。
+
+最大嫌疑：J4 屏排线座 / 排线本身（pin19 与 pin20 相邻）。
+
+交叉验证：三份官方构建在同一块板上全部卡在 I2C
+------------------------------------------------
+本仓库固件并非原因。以下官方固件在同一块板上表现一致：
+
+证据一 · 官方出厂恢复镜像
+    firmware/ESP32-S3-Touch-AMOLED-2.16-FactoryOnly-260318.bin
+    （15859712 字节，ESP-IDF v5.5.2，烧录至 0x0）
+
+        I (1904) ESP32-S3-Touch-AMOLED-2.16: Partition size: total: 2884241, used: 795419
+        I (1904) Main: SPIFFS mount successfully
+        W (1904) i2c.master: Please check pull-up resistances whether be connected
+                 properly. Otherwise unexpected behavior would happen.
+        E (2006) I2C_If: Fail to write to dev 30
+        ...（每 100ms 一条，连续 20 余次）
+        E (3306) I2C_If: Fail to read from dev 30
+        I (3306) ES8311: Work in Slave mode
+        E (4106) ES8311: Open fail
+
+        assert failed: bsp_audio_codec_speaker_init esp32_s3_touch_amoled_2_16.c:292
+                       (es8311_dev)
+        rst:0xc (RTC_SW_CPU_RST)   ->  Rebooting ...  （无限重启）
+
+    注：dev 30 是 8 位地址写法，即 ES8311 的 0x18；ESP-IDF 驱动自己就报了
+    "请检查上拉电阻"。
+
+证据二 · 小智（xiaozhi）v2.5.0
+    v2.5.0_waveshare-esp32-s3-touch-amoled-2.16.zip 内的 merged-binary.bin
+    （11374409 字节，ESP-IDF v6.1，烧录至 0x0）
+
+        I (208) Board: UUID=c799852e-... SKU=esp32-s3-touch-amoled-2.16
+        I (218) WaveshareEsp32s3TouchAMOLED2inch16: Init AXP2101
+        ESP_ERROR_CHECK failed: esp_err_t 0x108 (ESP_ERR_INVALID_RESPONSE) at 0x420266e4
+        file: "./main/boards/common/i2c_device.cc" line 27
+        func: void I2cDevice::WriteReg(uint8_t, uint8_t)
+        expression: i2c_master_transmit(i2c_device_, buffer, 2, 100)
+        abort() was called at PC 0x40385b36 on core 0
+        Rebooting ...                （9 秒内重启 24 次）
+
+    这是第一条 I2C 事务（初始化 AXP2101）就失败，连后续外设都没走到。
+
+证据三 · 仓库内 ESP-IDF / Arduino 示例
+    examples/ 中的示例同样在 I2C 初始化阶段失败（ESP-IDF 直接打印
+    "Please check pull-up resistances"）。Arduino 示例按 README 需
+    Arduino-ESP32 3.3.11 构建，与本地工具链（2.0.17）不同，未做完整对照，
+    但上面的官方镜像已足以证明。
+
+附
+--
+· 原理图：schematic/ESP32-S3-Touch-AMOLED-2.16-Schematic.pdf（仓库
+  waveshareteam/ESP32-S3-Touch-AMOLED-2.16 的 schematic/ 目录）
+· 复现方法：烧任意固件后读串口 115200（本板 USB-JTAG，DTR 需保持 0）
+· 本仓库固件自身的检测输出：
+      [dp] ERROR: SDA(15) 与 SCL(14) 短接 —— I2C 硬件故障，触摸/IMU/PMU 全部不可用
