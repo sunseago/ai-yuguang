@@ -16,14 +16,21 @@
 //     r=2 → (0,+1) 屏下    r=3 → (-1,0) 屏左
 // 让画面看着正，就取使"画面上"对齐物理"上"的那个 r。
 //
-// 竖立正/倒（|ay| 主导）用几何直觉即可；左右横放（|ax| 主导）要用相反的一对。
-// 原因是这块板（Waveshare ESP32-S3-Touch-AMOLED-2.16）上 QMI8658 的 +X 与面板
-// 的 +X 相反 —— 这是镜像，不是旋转，整体 offset 吸收不掉。实测症状正是
-// "竖立两种都对，左右横放两种各差 180°"。
-inline uint8_t dpBaseRotationFromGravity(float ax, float ay) {
+// 竖立正/倒（|ay| 主导）与 IMU 的安装方向无关，两种板子一样。
+// 左右横放（|ax| 主导）取决于 IMU 的 +X 是否与面板 +X 同向：
+//
+//   · LCD-1.54：同向，用几何直觉（ax<0 → r=3）—— 0.1.6 之前一直是这个，
+//     四种姿态实测全对。
+//   · AMOLED-2.16：相反（镜像），横放这一对要取反，否则左右横放各差 180°。
+//     这是镜像不是旋转，整体 offset 吸收不掉，所以只能按板子区分。
+//
+// 这个标志放在板级 header 里（IMU_MIRROR_X），不要在这里写死。
+inline uint8_t dpBaseRotationFromGravity(float ax, float ay, bool mirrorX) {
   const float dx = -ax;  // 物理"上"在屏幕 x 方向的分量
   const float dy = -ay;  // 物理"上"在屏幕 y 方向的分量
 
   if (fabsf(dy) >= fabsf(dx)) return dy >= 0 ? 0 : 2;  // 竖立：正 / 倒
-  return dx >= 0 ? 1 : 3;                              // 横放：见上面关于 X 极性的说明
+
+  // 横放：镜像板取反
+  return mirrorX ? (dx >= 0 ? 1 : 3) : (dx >= 0 ? 3 : 1);
 }

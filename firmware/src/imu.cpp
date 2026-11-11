@@ -66,7 +66,11 @@ bool probe(uint8_t addr) {
 
 // 姿态判定本身在 attitude.h（纯函数，主机可测）：早先这段逻辑写在固件里，
 // 改错一次只能在板子上肉眼发现，而症状（只有某两种姿态能对上）很难描述。
-uint8_t baseFromGravity(float ax, float ay) { return dpBaseRotationFromGravity(ax, ay); }
+// IMU_MIRROR_X 是板级差异：两块板的 QMI8658 安装方向不同，横放那一对要不要取反
+// 必须按板子区分 —— 之前把它当成全局修正，结果把 LCD-1.54 改坏了。
+uint8_t baseFromGravity(float ax, float ay) {
+  return dpBaseRotationFromGravity(ax, ay, IMU_MIRROR_X != 0);
+}
 
 }  // namespace
 

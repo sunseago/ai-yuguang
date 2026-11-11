@@ -91,47 +91,62 @@ int main() {
     if (!same) fails++;
   }
 
-  // 4) 姿态映射：四种摆放各应该转多少度
+  // 4) 姿态映射：两种板子各验一遍
   //
-  // 这里断言的极性是这块板（ESP32-S3-Touch-AMOLED-2.16）实测出来的：
-  // QMI8658 的 +X 与面板 +X 相反，所以左右横放取的是"反直觉"的那一对。
-  // 竖立的正/倒两种必须保持不变，横放两种必须和不带 X 镜像时相反。
+  // 两块板的 QMI8658 安装方向不同：LCD-1.54 的 +X 与面板同向（mirrorX=false），
+  // AMOLED-2.16 相反（mirrorX=true）。竖立正/倒两种与镜像无关，必须两块板一样；
+  // 左右横放两种在镜像板上要取反。之前把镜像修正写成了全局的，结果修好一块、
+  // 弄坏另一块 —— 所以这里两块板都要断言。
   {
-    struct { float ax, ay; int want; const char* name; } cases[] = {
-        {0.02f, -0.98f, 0, "竖立（正常）"},
-        {0.02f, 0.98f, 2, "竖立（倒过来）"},
-        {0.98f, 0.05f, 3, "横放 A"},
-        {-0.98f, 0.05f, 1, "横放 B"},
+    struct Case { float ax, ay; int plain, mirrored; const char* name; };
+    const Case cases[] = {
+        {0.02f, -0.98f, 0, 0, "竖立（正常）"},
+        {0.02f, 0.98f, 2, 2, "竖立（倒过来）"},
+        {-0.98f, 0.05f, 3, 1, "横放 A（面板 +X 朝下）"},
+        {0.98f, 0.05f, 1, 3, "横放 B（面板 +X 朝上）"},
         // 稍微倾斜也要落在同一象限
-        {0.30f, -0.85f, 0, "竖立（右倾 20°）"},
-        {0.85f, 0.30f, 3, "横放 A（倾斜 20°）"},
+        {0.30f, -0.85f, 0, 0, "竖立（倾斜 20°）"},
+        {-0.85f, 0.30f, 3, 1, "横放 A（倾斜 20°）"},
     };
-    int bad = 0;
+    const int n = (int)(sizeof(cases) / sizeof(cases[0]));
+    int badPlain = 0, badMirror = 0;
     for (const auto& c : cases) {
-      const int got = (int)dpBaseRotationFromGravity(c.ax, c.ay);
-      if (got != c.want) {
-        printf("FAIL 姿态 %s: ax=%.2f ay=%.2f 期望 r=%d 得到 r=%d\n", c.name, c.ax, c.ay, c.want,
-               got);
-        bad++;
+      const int gp = (int)dpBaseRotationFromGravity(c.ax, c.ay, false);
+      const int gm = (int)dpBaseRotationFromGravity(c.ax, c.ay, true);
+      if (gp != c.plain) {
+        printf("FAIL [LCD-1.54] %s: ax=%.2f ay=%.2f 期望 r=%d 得到 r=%d\n", c.name, c.ax, c.ay,
+               c.plain, gp);
+        badPlain++;
+      }
+      if (gm != c.mirrored) {
+        printf("FAIL [AMOLED-2.16] %s: ax=%.2f ay=%.2f 期望 r=%d 得到 r=%d\n", c.name, c.ax, c.ay,
+               c.mirrored, gm);
+        badMirror++;
       }
     }
-    printf("%s 四种姿态映射（%d 个用例）\n", bad ? "FAIL" : "PASS", (int)(sizeof(cases) / sizeof(cases[0])));
-    if (bad) fails++;
+    printf("%s 姿态映射 LCD-1.54（%d 个用例）\n", badPlain ? "FAIL" : "PASS", n);
+    printf("%s 姿态映射 AMOLED-2.16（%d 个用例）\n", badMirror ? "FAIL" : "PASS", n);
+    if (badPlain || badMirror) fails++;
   }
 
-  // 5) 相邻象限的旋转量必须差 90°（差 180° 就是"倒过来"的 bug）：
-  //    绕一整圈应该正好走 0,1,2,3 或 0,3,2,1，不允许出现 0,1,0,1 这种。
+  // 5) 绕一整圈必须是 0,1,2,3 或 0,3,2,1 —— 相邻象限差 90°，
+  //    差 180° 就是"倒过来"的 bug。两种板子都要满足。
   {
     const float k = 0.98f;
     const float ring[4][2] = {{0.03f, -k}, {k, 0.03f}, {-0.03f, k}, {-k, -0.03f}};
-    int bad = 0;
-    for (int i = 0; i < 4; i++) {
-      const int a = (int)dpBaseRotationFromGravity(ring[i][0], ring[i][1]);
-      const int b = (int)dpBaseRotationFromGravity(ring[(i + 1) % 4][0], ring[(i + 1) % 4][1]);
-      if (((b - a) & 3) != 1 && ((b - a) & 3) != 3) bad++;
+    for (int mirror = 0; mirror < 2; mirror++) {
+      int bad = 0;
+      for (int i = 0; i < 4; i++) {
+        const int a = (int)dpBaseRotationFromGravity(ring[i][0], ring[i][1], mirror != 0);
+        const int b =
+            (int)dpBaseRotationFromGravity(ring[(i + 1) % 4][0], ring[(i + 1) % 4][1], mirror != 0);
+        const int d = (b - a) & 3;
+        if (d != 1 && d != 3) bad++;
+      }
+      printf("%s 绕一圈相邻象限差 90°（%s，异常 %d 处）\n", bad ? "FAIL" : "PASS",
+             mirror ? "AMOLED-2.16" : "LCD-1.54", bad);
+      if (bad) fails++;
     }
-    printf("%s 绕一圈相邻象限差 90°（异常 %d 处）\n", bad ? "FAIL" : "PASS", bad);
-    if (bad) fails++;
   }
 
   printf(fails ? "\n有 %d 项失败\n" : "\n全部通过\n", fails);
