@@ -313,7 +313,7 @@ void loop() {
   }
   if (pwrLong) {
     gDirty = false;  // 马上要睡，别再排下一帧
-    powerOffDeepSleep();
+    powerOff();
   }
 
   // 熄屏时短按也只用来唤醒。长按（重新配网）不拦——那是"不管屏幕怎样都要生效"的操作。

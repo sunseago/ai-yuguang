@@ -54,6 +54,12 @@
 #define IMU_MIRROR_X 0
 
 // ---- 按键（低电平有效）----
+// 映射依据官方原理图 ESP32-S3-LCD-1.54-Schematic.pdf 的模块引脚表：
+//     IO0 → KEY_MINUS（丝印 BOOT，Key1，同时兼作下载模式）
+//     IO4 → KEY_PLUS （丝印 PLUS，Key2）
+//     IO5 → KEY_PWR  （丝印 PWR，Key3）
+// 早先这里写成 USER=5 / PWR=4，把 PLUS 和 PWR 弄反了：结果是长按 PLUS 关机、
+// 短按 PWR 熄屏。官方 02_button_example 里的三个 PIN_INPUT 0/5/4 与上表一致。
 #define BTN_BOOT 0   // 短按切亮度，长按 5s 重新配网
-#define BTN_USER 5   // 短按切页
-#define BTN_PWR 4    // 长按 1s 开机/关机
+#define BTN_USER 4   // PLUS：短按切页
+#define BTN_PWR 5    // PWR：短按熄屏，长按 1s 关机

@@ -183,19 +183,21 @@ const char* powerLabel() {
   return buf;
 }
 
-// ---------------- 关机：深度睡眠 ----------------
-// 长按 PWR 触发（见 input.cpp 的 1s 判定）。
+// ---------------- 关机 ----------------
+// 长按 PWR（GPIO5，丝印 KEY_PWR）触发。
 //
-// 为什么不去拉低 BAT_EN 做"真断电"：这块板的 BAT_EN 是电源保持脚，放掉之后
-// 电池供电会真的断电，只能靠再按 PWR 的硬件上电电路重新起来。万一那一路没接好，
-// 就变成"关得掉、开不了"，只能拆电池。深度睡眠在观感上一样（黑屏、静止、几乎不耗电），
-// 但任何情况下长按 PWR 都能唤醒，不会把板子卡死。
-void powerOffDeepSleep() {
+// 这块板的电源是「电池 → P-MOS → VSYS」，MOS 的栅极由 BAT_EN 控制，
+// 所以**放掉 BAT_EN 就是真断电**：电池供电时 MCU 会立刻没电，这也是为什么
+// 前面几行日志必须先 flush 出去（那就是最后的遗言）。
+//
+// 插着 USB 时 VSYS 由 VBUS 经 D3 供着，放掉 BAT_EN 断不了电 —— 这种情况退到
+// 深度睡眠：观感一样（黑屏、静止、几乎不耗电），按 PWR 即可唤醒。
+void powerOff() {
 #if BTN_PWR >= 0
   // 先清屏再睡：LCD 定在最后一帧会一直亮着背光，AMOLED 更会烧屏
   displayFill(0x0000);
   displayBrightness(0);
-  Serial.println("[dp] power off -> deep sleep (long press PWR to wake)");
+  Serial.println("[dp] power off (long press PWR to boot)");
   Serial.flush();
 
   // 必须等按键松开。ext0 是电平唤醒，手还按着就睡下去会立刻被自己唤醒，
@@ -203,10 +205,24 @@ void powerOffDeepSleep() {
   const uint32_t t0 = millis();
   while (digitalRead(BTN_PWR) == LOW && millis() - t0 < 3000) delay(20);
 
-  // 睡眠期间 GPIO 交给 RTC 域，上拉要显式打开，否则引脚悬空会被噪声唤醒
+#ifdef BAT_EN
+  if (!powerOnUsb()) {
+    Serial.println("[dp] on battery -> drop BAT_EN (hard power off)");
+    Serial.flush();
+    pinMode(BAT_EN, OUTPUT);
+    digitalWrite(BAT_EN, LOW);
+    delay(800);
+    // 走到这里说明没断成（例如 USB 还在供电）：恢复保持脚，别让它在拔线时莫名掉电
+    Serial.println("[dp] BAT_EN low did not cut power, fall back to deep sleep");
+    Serial.flush();
+    digitalWrite(BAT_EN, HIGH);
+  }
+#endif
+
+  // USB 供电（或断电没生效）：深度睡眠，按 PWR（低电平）唤醒
   rtc_gpio_pullup_en((gpio_num_t)BTN_PWR);
   rtc_gpio_pulldown_dis((gpio_num_t)BTN_PWR);
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)BTN_PWR, 0);  // 低电平（按下）唤醒
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)BTN_PWR, 0);
   delay(50);
   esp_deep_sleep_start();  // 不返回；唤醒后等于重新上电，从头跑 setup()
 #endif
