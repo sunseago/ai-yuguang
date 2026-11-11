@@ -55,6 +55,14 @@
 // 注意：这一位是 AMOLED 板实测的结论，别往 LCD-1.54 上套（那边是 0）。
 #define IMU_MIRROR_X 1
 
+// ---- 音频：ES8311 DAC + NS4150B 功放（官方 07_ES8311 示例的引脚）----
+// 注意 GPIO45=LRCLK、GPIO46=功放使能，别和 QSPI(4/5/6/7/38/12/39) 混了。
+#define AUDIO_MCLK 42
+#define AUDIO_BCLK 9
+#define AUDIO_LRCK 45
+#define AUDIO_DOUT 8
+#define AUDIO_PA 46
+
 // ---- 按键 ----
 // 板上丝印：BOOT=GPIO0，KEY=GPIO18。PWR 是 AXP2101 的 PWRON 信号（不是普通按键），
 // 空闲时电平为低；当成低有效按键读会一直判定"按着"，1 秒后触发手动关机、屏幕变黑。

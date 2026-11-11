@@ -101,6 +101,7 @@ bool s_bootShortFired = false;
 bool s_userDown = false;
 uint32_t s_userDownAt = 0;
 bool s_userShortFired = false;
+bool s_userLongFired = false;  // PLUS 长按：切提示音
 bool s_pwrDown = false;
 uint32_t s_pwrDownAt = 0;
 bool s_pwrFired = false;
@@ -291,9 +292,16 @@ void inputPoll() {
   if (user && !s_userDown) {
     s_userDown = true;
     s_userDownAt = now;
+    s_userLongFired = false;
+  } else if (user && s_userDown) {
+    // 按住 0.9s = 长按（切提示音），松开时不再补一次短按
+    if (now - s_userDownAt > 900) s_userLongFired = true;
   } else if (!user && s_userDown) {
     s_userDown = false;
-    if (now - s_userDownAt > 60 && now - s_userDownAt < 3000) s_userShortFired = true;
+    if (!s_userLongFired && now - s_userDownAt > 60 && now - s_userDownAt < 3000) {
+      s_userShortFired = true;
+    }
+    s_userLongFired = false;
   }
 
   // PWR 键：长按 1 秒触发一次"开机/关机"。armed 锁存保证一次按下只触发一次，
@@ -338,6 +346,17 @@ bool inputTakeBootLong() {
     s_bootLongFired = false;
     return true;
   }
+  return false;
+}
+
+bool inputTakeUserLong() {
+  // 长按在按住期间只触发一次，取走后清掉；松开时也不会补短按（见 s_userLongFired）
+  static bool s_taken = false;
+  if (s_userLongFired && !s_taken) {
+    s_taken = true;
+    return true;
+  }
+  if (!s_userLongFired) s_taken = false;
   return false;
 }
 

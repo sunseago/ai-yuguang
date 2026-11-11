@@ -19,6 +19,7 @@ struct UiInput {
   uint8_t rotation;    // 0..3，画面顺时针转了多少个 90°
   uint8_t rotOffset;   // 0..3，整体偏移（信息页现场校准用）
   bool imuOk;          // IMU 是否可用
+  const char* sound;   // 提示音："关" / "水滴" / "海浪" / "水滴+海浪"
 };
 
 void uiRender(Canvas& c, const UiInput& in);

@@ -6,6 +6,7 @@
 #include "canvas.h"
 #include "display.h"
 #include "imu.h"
+#include "audio.h"
 #include "input.h"
 #include "model.h"
 #include "net.h"
@@ -25,6 +26,39 @@ static uint32_t gLastBeat = 0;
 static bool gDirty = true;
 static bool gLastOnline = false;
 static uint8_t gLastRot = 0;
+// ---- 提示音：只在"状态跨进 WAIT / DONE"的那一下响，不是每轮都响 ----
+static uint8_t s_sndPrev[5] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+static bool s_sndPrimed = false;   // 首次快照只记基线，避免开机就哗一声
+static uint32_t s_sndAt = 0;
+static uint32_t s_sndCount = 0;
+
+static void checkSoundEvents() {
+  if (!s_sndPrimed) {
+    for (int i = 0; i < gModel.count && i < 5; i++) s_sndPrev[i] = gModel.items[i].state;
+    s_sndPrimed = true;
+    return;
+  }
+  bool ask = false, done = false;
+  for (int i = 0; i < gModel.count && i < 5; i++) {
+    const uint8_t st = gModel.items[i].state;
+    const uint8_t prev = s_sndPrev[i];
+    s_sndPrev[i] = st;
+    if (st == prev) continue;
+    if (st == DP_ST_AWAITING) ask = true;
+    else if (st == DP_ST_DONE) done = true;
+  }
+  if (!ask && !done) return;
+
+  // 同一个 provider 抖一下（WAIT→IDLE→WAIT）会连响，加最小间隔压住
+  const uint32_t now = millis();
+  if (s_sndAt && now - s_sndAt < 2500) return;
+  s_sndAt = now;
+  s_sndCount++;
+  // 两种同时到：优先提醒"在等你"的那个
+  audioPlayEvent(done && !ask);
+  Serial.printf("[dp] sound #%u: %s\n", (unsigned)s_sndCount, ask ? "attention" : "done");
+}
+
 static bool gImuOk = false;
 static uint8_t gImuRetries = 0;
 static uint32_t gImuRetryAt = 0;
@@ -57,6 +91,7 @@ static void render() {
   in.rotation = displayRotation();
   in.rotOffset = imuOffset();
   in.imuOk = imuReady();
+  in.sound = audioModeLabel(audioMode());
 
   uiRender(gCanvas, in);
   displayPush(gCanvas.buffer());
@@ -141,6 +176,9 @@ void setup() {
   inputInit();
   Serial.println("[dp] touch+buttons ready");
 
+  // 音频放在触摸之后：ES8311 挂在同一条 I2C 上，靠 Wire 已经起好的总线
+  audioInit();
+
   powerInit();
   Serial.printf("[dp] power=%s batt=%s\n", powerLabel(),
                 powerBatteryVoltage() < 0 ? "none" : "detected");
@@ -211,6 +249,7 @@ void loop() {
   if (netTakeSnapshot(gModel)) {
     if (gSelected >= gModel.count) gSelected = 0;
     gDirty = true;
+    checkSoundEvents();
   }
 
   if (gModel.bridgeOnline != gLastOnline) {
@@ -300,9 +339,18 @@ void loop() {
   bool bootShort = inputTakeBootShort();
   bool bootLong = inputTakeBootLong();
   bool userShort = inputTakeUserShort();
+  bool userLong = inputTakeUserLong();
   bool pwrLong = inputTakePwrLong();
   bool pwrShort = inputTakePwrShort();
-  if (bootShort || bootLong || userShort || pwrShort || pwrLong) active = true;
+  if (bootShort || bootLong || userShort || userLong || pwrShort || pwrLong) active = true;
+
+  // PLUS 长按：切提示音（关 → 水滴 → 海浪 → 水滴+海浪），切完立刻试听一声
+  if (userLong) {
+    const uint8_t m = audioCycleMode();
+    audioPlayEvent(true);
+    gDirty = true;
+    Serial.printf("[dp] sound mode -> %s\n", audioModeLabel(m));
+  }
 
   // PWR 分两档，都不受"屏幕是否已熄"影响 —— 关机键必须随时有效。
   //   短按：手动熄屏 / 亮屏（看完就走，不中断数据）

@@ -1,5 +1,7 @@
 #include "net.h"
 
+#include "audio.h"
+
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <DNSServer.h>
@@ -83,7 +85,7 @@ const char kPortalHtml[] PROGMEM = R"HTML(<!doctype html><html lang="zh"><meta c
 <style>body{font-family:-apple-system,sans-serif;margin:0;padding:24px;background:#f6f7f9;color:#16181d}
 h1{font-size:20px;margin:0 0 4px}p{color:#6b7280;font-size:13px;margin:0 0 20px}
 label{display:block;font-size:13px;margin:14px 0 6px;color:#6b7280}
-input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #e3e5e9;border-radius:10px;font-size:15px}
+input,select{width:100%;box-sizing:border-box;padding:12px;border:1px solid #e3e5e9;border-radius:10px;font-size:15px;background:#fff}
 button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:10px;background:#16181d;color:#fff;font-size:16px}
 </style>
 <h1>AI余光 配网</h1><p>填好 Wi-Fi 与电脑地址后保存，设备会自动重启。</p>
@@ -92,6 +94,9 @@ button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:10px;backg
 <label>Wi-Fi 密码</label><input name="pass" type="password">
 <label>电脑地址（可留空，自动发现）</label><input name="host" placeholder="192.168.1.10">
 <label>访问令牌（可留空；需与电脑端 config.json 的 authToken 一致）</label><input name="token" placeholder="可选">
+<label>提示音（弹窗 / 任务完成时）</label>
+<select name="snd"><option value="">保持不变</option><option value="0">关</option>
+<option value="1">水滴</option><option value="2">海浪</option><option value="3">水滴 + 海浪</option></select>
 <button type="submit">保存并重启</button></form></html>)HTML";
 
 void startConfigPortal() {
@@ -120,6 +125,9 @@ void startConfigPortal() {
     // 可选鉴权 token：留空即关闭，与桥接侧 authToken 保持一致才能取到数据
     String token = s_server->arg("token");
     token.toCharArray(s_token, sizeof(s_token));
+    // 提示音：留空表示"保持不变"，避免只改 Wi-Fi 时把设备上用 PLUS 键选的音效覆盖掉
+    String snd = s_server->arg("snd");
+    if (snd.length()) audioSetMode((uint8_t)snd.toInt());
     saveConfig(ssid, pass, host, 8787);
     s_server->send(200, "text/html; charset=utf-8",
                    "<meta charset=utf-8><body style='font-family:sans-serif;padding:24px'>"

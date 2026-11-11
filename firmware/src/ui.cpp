@@ -346,17 +346,20 @@ void infoPage(Canvas& c, const UiInput& in) {
       {"wifi", in.wifiOk ? "connected" : "down"},
       {"power", in.power ? in.power : "-"},
       {"screen", bri},
+      {"sound", in.sound ? in.sound : "-"},
       {"tilt", tilt},
   };
-  int y = 56;
+  // 7 行 + 3 行提示要塞进 240px，行距收到 18
+  int y = 54;
   for (auto& r : rows) {
     c.text(10, y, r.k, dpcolor::FAINT, 1);
     c.textEllipsis(90, y, DP_W - 100, r.v, dpcolor::TEXT, 1);
-    y += 20;
+    y += 18;
   }
   c.hline(10, y + 2, DP_W - 20, dpcolor::LINE);
-  c.text(10, y + 10, "tap BOOT = rotate 90", dpcolor::MUTED, 1);
-  c.text(10, y + 26, "hold BOOT 5s = re-pair", dpcolor::MUTED, 1);
+  c.text(10, y + 8, "tap BOOT = rotate 90", dpcolor::MUTED, 1);
+  c.text(10, y + 22, "hold BOOT 5s = re-pair", dpcolor::MUTED, 1);
+  c.text(10, y + 36, "hold PLUS = sound", dpcolor::MUTED, 1);
 
   c.fillCircle(112, 230, 3, dpcolor::LINE);
   c.fillCircle(124, 230, 3, dpcolor::TEXT);

@@ -53,6 +53,14 @@
 // 这块板是同向的，用几何直觉即可 —— 0.1.6 及之前一直如此，四种姿态实测全对。
 #define IMU_MIRROR_X 0
 
+// ---- 音频：ES8311 DAC + NS4150B 功放（官方 01_audio_out 示例的引脚）----
+// ES8311 挂在触摸那条 I2C 上（0x18），所以音频初始化必须在 Wire.begin() 之后。
+#define AUDIO_MCLK 8
+#define AUDIO_BCLK 9
+#define AUDIO_LRCK 10
+#define AUDIO_DOUT 12
+#define AUDIO_PA 7
+
 // ---- 按键（低电平有效）----
 // 映射依据官方原理图 ESP32-S3-LCD-1.54-Schematic.pdf 的模块引脚表：
 //     IO0 → KEY_MINUS（丝印 BOOT，Key1，同时兼作下载模式）
