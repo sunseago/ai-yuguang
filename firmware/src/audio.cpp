@@ -61,7 +61,7 @@ const Partial kHarp[] = {{1.00f, 1.00f, 0.75f},
 // 八音盒：基频很高 + 5.4 倍金属分音，衰减极快 = 脆
 const Partial kMusicBox[] = {{1.00f, 1.00f, 0.30f}, {5.40f, 0.32f, 0.11f}, {8.90f, 0.12f, 0.06f}};
 // 风铃单片：钟类分音，余音长
-const Partial kChime[] = {{1.00f, 1.00f, 0.80f}, {2.76f, 0.20f, 0.40f}, {5.40f, 0.05f, 0.18f}};
+const Partial kChime[] = {{1.00f, 1.00f, 0.34f}, {2.76f, 0.10f, 0.18f}, {5.40f, 0.03f, 0.09f}};
 
 struct Voice {
   float f0;
@@ -124,15 +124,17 @@ float waveSample(float t, float& lp) {
 }
 
 // 轻风铃：5 片错开敲击，音高不同，像一阵风拂过
-constexpr int kChimeN = 5;
-const float kChimeF[kChimeN] = {1175.0f, 1319.0f, 1568.0f, 1760.0f, 2093.0f};
-const float kChimeAt[kChimeN] = {0.00f, 0.16f, 0.34f, 0.52f, 0.72f};
+constexpr int kChimeN = 4;
+const float kChimeF[kChimeN] = {1175.0f, 1568.0f, 1760.0f, 2093.0f};
+const float kChimeAt[kChimeN] = {0.00f, 0.14f, 0.30f, 0.46f};
+// 余音会叠加，越晚的片子叠得越多；给后几下收一点，听感才平均
+const float kChimeAmp[kChimeN] = {1.00f, 0.95f, 0.90f, 0.85f};
 float chimeSample(float t) {
   float sum = 0;
   for (int i = 0; i < kChimeN; i++) {
     const float dt = t - kChimeAt[i];
     if (dt <= 0) continue;
-    const Voice v = {kChimeF[i], 2.0f, 0.0025f, kChime, 3, 0.15f};
+    const Voice v = {kChimeF[i], 1.2f, 0.0012f, kChime, 3, 0.17f * kChimeAmp[i]};
     sum += additive(dt, v);
   }
   return sum;
@@ -181,7 +183,7 @@ float birdSample(float t, float& phase) {
 float durOf(uint8_t kind) {
   switch (kind) {
     case DP_SND_WAVE: return 1.70f;
-    case DP_SND_CHIME: return 1.60f;
+    case DP_SND_CHIME: return 0.95f;
     case DP_SND_RAIN: return 2.40f;
     case DP_SND_BIRD: return 1.00f;
     case DP_SND_SOFTBELL: return kVoiceSoftBell.dur;
@@ -240,9 +242,14 @@ struct Gen {
 void playBlocking(uint8_t kind) {
   Gen g;
   g.init(kind);
+  // 结尾淡出 25ms：时长是硬截断的，而打击类音色到最后往往还有百分之几十的幅度，
+  // 直接切断会在波形中间形成一个台阶 —— 听起来就是"咔"一声（风铃/波浪最明显）。
+  const int total = (int)(g.dur * kSampleRate);
+  const int fadeN = kSampleRate * 25 / 1000;
   int idx = 0;
-  while (!g.done()) {
-    const float v = g.next();
+  for (int n = 0; n < total; n++) {
+    float v = g.next();
+    if (n > total - fadeN) v *= (float)(total - n) / (float)fadeN;
     // 主音量由 audioVolume() 控制，上限压到 0.8 留点余量避免削顶
     const float gain = (float)s_vol / 100.0f * 0.8f;
     int32_t s = (int32_t)(v * gain * 32767.0f);
