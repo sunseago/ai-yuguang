@@ -100,8 +100,14 @@ button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:10px;backg
 <select name="sndD"><option value="">保持不变</option><option value="0">关</option><option value="1">水滴</option><option value="2">海浪</option><option value="3">气泡</option><option value="4">木琴</option><option value="5">竖琴</option><option value="6">软铃</option><option value="7">钢琴</option><option value="8">马林巴</option><option value="9">八音盒</option><option value="10">风铃</option></select>
 <button type="submit">保存并重启</button></form></html>)HTML";
 
+// 前置声明：配网页要先用到它（定义在 connectWifi 旁边，逻辑更集中）
+void publishWifiInfo(bool verbose);
+
 void startConfigPortal() {
-  WiFi.mode(WIFI_AP);
+  // AP+STA 并存：配网期间 STA 仍然在后台重试关联。
+  // 之前的写法是纯 AP + while(true)，一旦因为"开机那一下信号差"被判成连不上，
+  // 就会永远停在 SETUP MODE（只能重启）——弱信号环境下这个坑很致命。
+  WiFi.mode(WIFI_AP_STA);
   String apName = "Yuguang-" + String((uint32_t)(ESP.getEfuseMac() & 0xFFFF), HEX);
   // WPA2 要求 8–63 位，原来的 "yuguang" 只有 7 位，softAP 直接失败（日志里是
   // "passphrase too short"），新板第一次配网会连热点都起不来。
@@ -141,6 +147,9 @@ void startConfigPortal() {
   s_server->onNotFound([]() { s_server->send(200, "text/html; charset=utf-8", kPortalHtml); });
   s_server->begin();
 
+  // 有凭据就继续试 STA（用户在配网页保存会重启，这里处理的是"其实能连、只是慢"）
+  if (s_ssid[0]) WiFi.begin(s_ssid, s_pass);
+
   // 屏幕上给出提示，避免用户对着黑屏猜
   uint16_t* buf = displayBuffer();
   if (buf) {
@@ -155,11 +164,40 @@ void startConfigPortal() {
     displayPush(buf);
   }
 
-  while (true) {
+  uint32_t lastStaCheck = millis();
+  for (;;) {
     s_dns->processNextRequest();
     s_server->handleClient();
+    // 每 3 秒看一眼 STA：连上了就收摊回去正常显示，别把人按在配网页里
+    if (millis() - lastStaCheck > 3000) {
+      lastStaCheck = millis();
+      if (WiFi.status() == WL_CONNECTED) {
+        publishWifiInfo(false);
+        Serial.printf("[dp] portal: sta connected (rssi=%d), leaving setup mode\n", (int)s_rssi);
+        s_server->stop();
+        s_dns->stop();
+        WiFi.softAPdisconnect(true);
+        WiFi.mode(WIFI_STA);
+        WiFi.setSleep(false);
+        return;
+      }
+    }
     delay(2);
   }
+}
+
+// 把当前 IP/RSSI 发布出去（配网页退出、正常连接都用这一份逻辑）
+void publishWifiInfo(bool verbose) {
+  s_wifiOk = WiFi.status() == WL_CONNECTED;
+  if (!s_wifiOk) return;
+  String ip = WiFi.localIP().toString();
+  const int8_t rssi = (int8_t)WiFi.RSSI();
+  portENTER_CRITICAL(&s_netMux);
+  strncpy(s_ip, ip.c_str(), sizeof(s_ip) - 1);
+  s_ip[sizeof(s_ip) - 1] = '\0';
+  s_rssi = rssi;
+  portEXIT_CRITICAL(&s_netMux);
+  if (verbose) Serial.printf("[dp] wifi connected ip=%s rssi=%d\n", ip.c_str(), (int)rssi);
 }
 
 void connectWifi(uint32_t timeoutMs) {
@@ -170,19 +208,8 @@ void connectWifi(uint32_t timeoutMs) {
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeoutMs) {
     delay(120);
   }
-  s_wifiOk = WiFi.status() == WL_CONNECTED;
-  if (s_wifiOk) {
-    String ip = WiFi.localIP().toString();
-    const int8_t rssi = (int8_t)WiFi.RSSI();
-    portENTER_CRITICAL(&s_netMux);
-    strncpy(s_ip, ip.c_str(), sizeof(s_ip) - 1);
-    s_ip[sizeof(s_ip) - 1] = '\0';
-    s_rssi = rssi;
-    portEXIT_CRITICAL(&s_netMux);
-    Serial.printf("[dp] wifi connected ip=%s rssi=%d\n", ip.c_str(), (int)rssi);
-  } else {
-    Serial.println("[dp] wifi connect failed");
-  }
+  publishWifiInfo(true);
+  if (!s_wifiOk) Serial.println("[dp] wifi connect failed");
 }
 
 // ---------- UDP 发现：问一句「谁是桥接」，桥接回 IP ----------
@@ -231,9 +258,14 @@ bool discoverBridge() {
 void netBegin() {
   loadConfig();
   if (!s_ssid[0]) startConfigPortal();
-  connectWifi(15000);
+  // 单次 15 秒对弱信号太短：开机时射频要扫信道，RSSI -80 左右常常要 20~30 秒。
+  // 试 3 轮（约 45 秒）再判失败，避免把"慢"误判成"没有网"。
+  for (int i = 0; i < 3 && !s_wifiOk; i++) {
+    if (i > 0) Serial.printf("[dp] wifi retry %d/3\n", i + 1);
+    connectWifi(15000);
+  }
   if (!s_wifiOk) {
-    // 连不上就退回去配网，避免用户面对一块什么都没有的屏
+    // 还是连不上才退到配网页（那里仍会继续重试 STA，连上就自动退出）
     startConfigPortal();
   }
   if (!s_host[0]) {
