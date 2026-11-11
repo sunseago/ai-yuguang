@@ -128,6 +128,17 @@ int main() {
   uiRender(gCanvas, in);
   writePPM("preview_info.ppm", gBuf);
 
+  // 设置页：音效网格 + 音量条（改布局常量后先看这张）
+  in.page = 3;
+  in.sound = "水滴 / 海浪";
+  in.sndSlot = 0;
+  in.alertSnd = 1;
+  in.doneSnd = 2;
+  in.volume = 65;
+  in.volFocus = false;
+  uiRender(gCanvas, in);
+  writePPM("preview_sound.ppm", gBuf);
+
   // 第四张：三种"结局"状态摆在一起，专门用来看状态胶囊的配色对不对。
   // 改 badgeStyle() 之后先看这张，别直接上机。
   in.page = 0;

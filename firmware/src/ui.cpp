@@ -1,5 +1,7 @@
 #include "ui.h"
 
+#include "soundnames.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -365,7 +367,95 @@ void infoPage(Canvas& c, const UiInput& in) {
   c.fillCircle(124, 230, 3, dpcolor::TEXT);
 }
 
+// ---------------- 设置页：音效选择 + 音量 ----------------
+// 布局常量集中在这里，绘制和命中测试共用，避免两边各写一份然后对不上。
+constexpr int kCellX = 8, kCellY = 52, kCellW = 56, kCellH = 26;
+constexpr int kCellGapX = 2, kCellGapY = 2;
+constexpr int kCellCols = 4;
+
+void cellRect(int i, int& x, int& y) {
+  x = kCellX + (i % kCellCols) * (kCellW + kCellGapX);
+  y = kCellY + (i / kCellCols) * (kCellH + kCellGapY);
+}
+
+// 槽位切换胶囊
+constexpr int kSlotY = 26, kSlotH = 18, kSlotW = 44;
+constexpr int kSlotAX = 104, kSlotBX = 152;
+
+// 音量行
+constexpr int kVolY = 172, kVolH = 22;
+constexpr int kVolMinusX = 44, kVolPlusX = 178, kVolBtnW = 26;
+constexpr int kVolBarX = 76, kVolBarW = 96;
+
+void settingsPage(Canvas& c, const UiInput& in) {
+  statusBar(c, in);
+  c.text(8, 28, "SOUND", dpcolor::TEXT, 1);
+
+  // 槽位切换：点一下决定下面网格在改"弹窗音"还是"完成音"
+  const bool alertSlot = (in.sndSlot == 0);
+  c.fillRoundRect(kSlotAX, kSlotY, kSlotW, kSlotH, 9,
+                  alertSlot ? dpcolor::TEXT : dpcolor::LINE);
+  c.textAligned(kSlotAX, kSlotY + 4, kSlotW, "弹窗",
+                alertSlot ? dpcolor::BG : dpcolor::MUTED, 1, DP_CENTER);
+  c.fillRoundRect(kSlotBX, kSlotY, kSlotW, kSlotH, 9,
+                  alertSlot ? dpcolor::LINE : dpcolor::TEXT);
+  c.textAligned(kSlotBX, kSlotY + 4, kSlotW, "完成",
+                alertSlot ? dpcolor::MUTED : dpcolor::BG, 1, DP_CENTER);
+
+  // 音效网格：0=关，1..12 种音色
+  const uint8_t cur = alertSlot ? in.alertSnd : in.doneSnd;
+  for (int i = 0; i < DP_SOUND_COUNT; i++) {
+    int x, y;
+    cellRect(i, x, y);
+    const bool sel = (cur == (uint8_t)i);
+    c.fillRoundRect(x, y, kCellW, kCellH, 6, sel ? dpcolor::TEXT : dpcolor::LINE);
+    c.textAligned(x, y + 8, kCellW, dpSoundName((uint8_t)i),
+                  sel ? dpcolor::BG : dpcolor::TEXT, 1, DP_CENTER);
+  }
+
+  // 音量：− / 条 / + / 百分比
+  c.text(8, kVolY + 6, "VOL", in.volFocus ? dpcolor::TEXT : dpcolor::MUTED, 1);
+  const uint16_t edge = in.volFocus ? dpcolor::TEXT : dpcolor::LINE;
+  c.roundRect(kVolMinusX, kVolY, kVolBtnW, kVolH, 6, edge, dpcolor::BG);
+  c.textAligned(kVolMinusX, kVolY + 5, kVolBtnW, "-", dpcolor::TEXT, 1, DP_CENTER);
+  c.bar(kVolBarX, kVolY + 7, kVolBarW, 8, (float)in.volume / 100.0f,
+        in.volFocus ? dpcolor::TEXT : dpcolor::MUTED, dpcolor::LINE);
+  c.roundRect(kVolPlusX, kVolY, kVolBtnW, kVolH, 6, edge, dpcolor::BG);
+  c.textAligned(kVolPlusX, kVolY + 5, kVolBtnW, "+", dpcolor::TEXT, 1, DP_CENTER);
+
+  char pct[8];
+  snprintf(pct, sizeof(pct), "%u%%", (unsigned)in.volume);
+  c.textAligned(208, kVolY + 6, 26, pct, dpcolor::MUTED, 1, DP_RIGHT);
+
+  c.hline(8, 204, DP_W - 16, dpcolor::LINE);
+  c.text(8, 212, "tap = pick / long PLUS = vol", dpcolor::FAINT, 1);
+}
+
 }  // namespace
+
+// 设置页命中测试：和绘制共用 cellRect，改布局不会两边对不上
+int uiHitSoundCell(int x, int y) {
+  for (int i = 0; i < DP_SOUND_COUNT; i++) {
+    int cx, cy;
+    cellRect(i, cx, cy);
+    if (x >= cx && x < cx + kCellW && y >= cy && y < cy + kCellH) return i;
+  }
+  return -1;
+}
+
+int uiHitSoundSlot(int x, int y) {
+  if (y < kSlotY || y >= kSlotY + kSlotH) return -1;
+  if (x >= kSlotAX && x < kSlotAX + kSlotW) return 0;
+  if (x >= kSlotBX && x < kSlotBX + kSlotW) return 1;
+  return -1;
+}
+
+int uiHitVolume(int x, int y) {
+  if (y < kVolY || y >= kVolY + kVolH) return 0;
+  if (x >= kVolMinusX && x < kVolMinusX + kVolBtnW) return -1;
+  if (x >= kVolPlusX && x < kVolPlusX + kVolBtnW) return 1;
+  return 0;
+}
 
 void uiRender(Canvas& c, const UiInput& in) {
   c.clear(dpcolor::BG);
@@ -373,6 +463,8 @@ void uiRender(Canvas& c, const UiInput& in) {
     detail(c, in);
   } else if (in.page == 2) {
     infoPage(c, in);
+  } else if (in.page == 3) {
+    settingsPage(c, in);
   } else {
     overview(c, in);
   }

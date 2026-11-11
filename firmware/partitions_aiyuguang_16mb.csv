@@ -1,0 +1,16 @@
+# AI余光 · ESP32-S3 16MB 自定义分区表
+#
+# 为什么不用 default_16MB.csv：那里的 nvs 在 0x9000，而发布用的合并镜像从 0x0
+# 一直写到应用末尾（约 0x170000），merge_bin 用 0xFF 填满空隙，会把 nvs 一起擦掉 ——
+# 表现就是"每烧一次固件，Wi-Fi 账号密码和屏幕朝向偏移全没了"。
+#
+# 这里把 nvs 挪到应用之后（0x310000），合并镜像永远碰不到它，升级不再丢配置。
+# 代价：从旧布局切过来时，旧 nvs 不会被读取，需要重新配一次网（只这一次）。
+#
+# 校验：0x320000 + 0xCE0000 = 0x1000000 = 16MB
+#
+# Name,     Type, SubType,  Offset,    Size,     Flags
+otadata,    data, ota,      0xe000,    0x2000,
+app0,       app,  ota_0,    0x10000,   0x300000,
+nvs,        data, nvs,      0x310000,  0x4000,
+spiffs,     data, spiffs,   0x320000,  0xCE0000,

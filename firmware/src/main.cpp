@@ -24,6 +24,8 @@ static const uint8_t kBrightSteps[] = {30, 60, 100};
 static uint32_t gLastRender = 0;
 static uint32_t gLastBeat = 0;
 static bool gDirty = true;
+static uint8_t gSndSlot = 0;    // 设置页正在编辑哪个音效槽：0=弹窗 1=完成
+static bool gVolFocus = false;  // 长按 PLUS 进来：高亮音量条
 static bool gLastOnline = false;
 static uint8_t gLastRot = 0;
 // ---- 提示音：只在"状态跨进 WAIT / DONE"的那一下响，不是每轮都响 ----
@@ -92,6 +94,11 @@ static void render() {
   in.rotOffset = imuOffset();
   in.imuOk = imuReady();
   in.sound = audioPairLabel();
+  in.sndSlot = gSndSlot;
+  in.alertSnd = audioAlertMode();
+  in.doneSnd = audioDoneMode();
+  in.volume = audioVolume();
+  in.volFocus = gVolFocus;
 
   uiRender(gCanvas, in);
   displayPush(gCanvas.buffer());
@@ -319,6 +326,29 @@ void loop() {
     } else if (gPage == 1) {
       gPage = 0;
       gDirty = true;
+    } else if (gPage == 3) {
+      // 设置页：先看槽位胶囊，再看音效格子，最后看音量按钮
+      const int slot = uiHitSoundSlot(tx, ty);
+      const int cell = uiHitSoundCell(tx, ty);
+      const int dv = uiHitVolume(tx, ty);
+      if (slot >= 0) {
+        gSndSlot = (uint8_t)slot;
+        gDirty = true;
+      } else if (cell >= 0) {
+        if (gSndSlot == 0) audioSetAlertMode((uint8_t)cell);
+        else audioSetDoneMode((uint8_t)cell);
+        audioPlay((uint8_t)cell);  // 点一下立刻听效果
+        gVolFocus = false;
+        gDirty = true;
+      } else if (dv != 0) {
+        int v = (int)audioVolume() + dv * 10;
+        if (v < 0) v = 0;
+        if (v > 100) v = 100;
+        audioSetVolume((uint8_t)v);
+        audioPlay(audioAlertMode());  // 用当前弹窗音试一下响度
+        gVolFocus = true;
+        gDirty = true;
+      }
     } else {
       gPage = 0;
       gDirty = true;
@@ -327,6 +357,9 @@ void loop() {
     if (gPage == 0) {
       gPage = 2;
       gDirty = true;
+    } else if (gPage == 2) {
+      gPage = 3;
+      gDirty = true;
     }
   } else if (g == DP_G_SWIPE_RIGHT) {
     if (gPage != 0) {
@@ -334,6 +367,9 @@ void loop() {
       gDirty = true;
     }
   }
+
+  // 不在设置页就别留着音量高亮的框
+  if (gPage != 3 && gVolFocus) gVolFocus = false;
 
   // ---- 按键 ----
   bool bootShort = inputTakeBootShort();
@@ -344,12 +380,13 @@ void loop() {
   bool pwrShort = inputTakePwrShort();
   if (bootShort || bootLong || userShort || userLong || pwrShort || pwrLong) active = true;
 
-  // PLUS 长按：切提示音（关 → 水滴 → 海浪 → 水滴+海浪），切完立刻试听一声
+  // PLUS 长按：打开设置页并聚焦音量（之后用触摸 − / + 调）
   if (userLong) {
-    const uint8_t m = audioCycleAlert();
-    audioPlay(m);  // 立刻试听这一档（"关"自然就没声）
+    gPage = 3;
+    gVolFocus = true;
+    audioPlay(audioAlertMode());  // 先响一下当前音量，给个参照
     gDirty = true;
-    Serial.printf("[dp] sound alert -> %s\n", audioModeLabel(m));
+    Serial.printf("[dp] volume focus (vol=%u)\n", (unsigned)audioVolume());
   }
 
   // PWR 分两档，都不受"屏幕是否已熄"影响 —— 关机键必须随时有效。
@@ -430,7 +467,8 @@ void loop() {
     ESP.restart();
   }
   if (userShort) {
-    gPage = (gPage + 1) % 3;
+    // 0 总览 → 2 信息 → 3 设置 → 0（详情页只能点卡片进，不占按键档位）
+    gPage = (gPage == 0) ? 2 : (gPage == 2 ? 3 : 0);
     gDirty = true;
   }
 

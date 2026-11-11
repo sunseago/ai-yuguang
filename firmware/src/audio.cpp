@@ -10,6 +10,7 @@
 #include "board_config.h"
 
 #include "audio/es8311.h"
+#include "soundnames.h"
 
 namespace {
 
@@ -23,6 +24,7 @@ es8311_handle_t s_codec = nullptr;
 bool s_ok = false;
 uint8_t s_alert = DP_SND_DROP;
 uint8_t s_done = DP_SND_WAVE;
+uint8_t s_vol = 65;
 QueueHandle_t s_queue = nullptr;
 int16_t s_block[kBlockFrames * 2];  // 左右声道交错
 
@@ -136,10 +138,52 @@ float chimeSample(float t) {
   return sum;
 }
 
+// 雨声：白噪声拆成高低两段做带通（约 500Hz~3kHz 的沙沙声），
+// 再叠上按随机间隔触发的"水珠"短促衰减 —— 只有噪声会像电视雪花，没有雨感。
+float rainSample(float t, float& lpFast, float& lpSlow, float& tick, float& nextTick) {
+  const float n = whiteNoise();
+  lpFast += 0.45f * (n - lpFast);
+  lpSlow += 0.05f * (n - lpSlow);
+  const float hiss = (lpFast - lpSlow) * 1.1f;
+
+  tick *= 0.986f;  // 约 4.5ms 衰减
+  if (t >= nextTick) {
+    tick = 1.0f;
+    s_rng = s_rng * 1664525u + 1013904223u;
+    nextTick = t + 0.012f + (float)(s_rng >> 16) / 65536.0f * 0.05f;
+  }
+  // 总体包络：0.15s 淡入，末尾 0.5s 淡出（时长写死，避免依赖后面才定义的 durOf）
+  const float kRainDur = 2.40f;
+  float env = (t < 0.15f) ? t / 0.15f : 1.0f;
+  if (t > kRainDur - 0.5f) env *= (kRainDur - t) / 0.5f;
+  return (hiss * 0.55f + hiss * tick * 1.3f) * env;
+}
+
+// 远处鸟鸣：三声短促啁啾，音高上下扫 + 38Hz 颤音；整体音量压低表示"远"
+float birdSample(float t, float& phase) {
+  static const float at[3] = {0.02f, 0.20f, 0.56f};
+  static const float f0[3] = {2900.0f, 3400.0f, 2700.0f};
+  static const float f1[3] = {3700.0f, 2600.0f, 3500.0f};
+  static const float du[3] = {0.085f, 0.100f, 0.090f};
+  static const float am[3] = {0.50f, 0.42f, 0.34f};
+  float sum = 0;
+  for (int i = 0; i < 3; i++) {
+    const float u = (t - at[i]) / du[i];
+    if (u <= 0.0f || u >= 1.0f) continue;
+    const float f = f0[i] + (f1[i] - f0[i]) * u + 200.0f * sinf(2.0f * kPi * 38.0f * u);
+    phase += 2.0f * kPi * f / kSampleRate;
+    const float env = powf(sinf(kPi * u), 0.7f);
+    sum += sinf(phase) * env * am[i];
+  }
+  return sum * 0.5f;
+}
+
 float durOf(uint8_t kind) {
   switch (kind) {
     case DP_SND_WAVE: return 1.70f;
     case DP_SND_CHIME: return 2.00f;
+    case DP_SND_RAIN: return 2.40f;
+    case DP_SND_BIRD: return 1.00f;
     case DP_SND_SOFTBELL: return kVoiceSoftBell.dur;
     case DP_SND_PIANO: return kVoicePiano.dur;
     case DP_SND_HARP: return kVoiceHarp.dur;
@@ -156,6 +200,9 @@ struct Gen {
   float t = 0;
   float phase = 0;
   float lp = 0;
+  float lp2 = 0;
+  float tick = 0;
+  float nextTick = 0.05f;
   float dur;
 
   void init(uint8_t k) {
@@ -163,6 +210,9 @@ struct Gen {
     t = 0;
     phase = 0;
     lp = 0;
+    lp2 = 0;
+    tick = 0;
+    nextTick = 0.05f;
     dur = durOf(k);
   }
   bool done() const { return t >= dur; }
@@ -171,6 +221,8 @@ struct Gen {
     switch (kind) {
       case DP_SND_WAVE: v = waveSample(t, lp); break;
       case DP_SND_CHIME: v = chimeSample(t); break;
+      case DP_SND_RAIN: v = rainSample(t, lp, lp2, tick, nextTick); break;
+      case DP_SND_BIRD: v = birdSample(t, phase); break;
       case DP_SND_BUBBLE: v = bubbleSample(t, phase); break;
       case DP_SND_XYLO: v = additive(t, kVoiceXylo); break;
       case DP_SND_MARIMBA: v = additive(t, kVoiceMarimba); break;
@@ -191,8 +243,9 @@ void playBlocking(uint8_t kind) {
   int idx = 0;
   while (!g.done()) {
     const float v = g.next();
-    // 主音量压低：桌面设备，提示音不该吓人
-    int32_t s = (int32_t)(v * 0.55f * 32767.0f);
+    // 主音量由 audioVolume() 控制，上限压到 0.8 留点余量避免削顶
+    const float gain = (float)s_vol / 100.0f * 0.8f;
+    int32_t s = (int32_t)(v * gain * 32767.0f);
     if (s > 32767) s = 32767;
     if (s < -32768) s = -32768;
     s_block[idx++] = (int16_t)s;
@@ -289,9 +342,13 @@ void loadSlots() {
       s_done = legacy;
     }
   }
+  s_vol = p.getUChar("vol", 65);
+  if (s_vol > 100) s_vol = 100;
   p.end();
   if (s_alert >= DP_SND_COUNT) s_alert = DP_SND_DROP;
   if (s_done >= DP_SND_COUNT) s_done = DP_SND_WAVE;
+  s_vol = p.getUChar("vol", 65);
+  if (s_vol > 100) s_vol = 100;
 
   // 写回新键，下次就不用再迁移
   saveSlot("sndA", s_alert);
@@ -340,6 +397,13 @@ void audioSetDoneMode(uint8_t mode) {
   saveSlot("sndD", s_done);
 }
 
+uint8_t audioVolume() { return s_vol; }
+
+void audioSetVolume(uint8_t v) {
+  s_vol = v > 100 ? 100 : v;
+  saveSlot("vol", s_vol);
+}
+
 uint8_t audioCycleAlert() {
   audioSetAlertMode((uint8_t)((s_alert + 1) % DP_SND_COUNT));
   return s_alert;
@@ -354,21 +418,7 @@ void audioPlayEvent(bool complete) {
   audioPlay(complete ? s_done : s_alert);
 }
 
-const char* audioModeLabel(uint8_t mode) {
-  switch (mode) {
-    case DP_SND_DROP: return "水滴";
-    case DP_SND_WAVE: return "海浪";
-    case DP_SND_BUBBLE: return "气泡";
-    case DP_SND_XYLO: return "木琴";
-    case DP_SND_HARP: return "竖琴";
-    case DP_SND_SOFTBELL: return "软铃";
-    case DP_SND_PIANO: return "钢琴";
-    case DP_SND_MARIMBA: return "马林巴";
-    case DP_SND_MUSICBOX: return "八音盒";
-    case DP_SND_CHIME: return "风铃";
-    default: return "关";
-  }
-}
+const char* audioModeLabel(uint8_t mode) { return dpSoundName(mode); }
 
 const char* audioPairLabel() {
   static char buf[24];

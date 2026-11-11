@@ -22,7 +22,9 @@ enum : uint8_t {
   DP_SND_MARIMBA = 8,   // 马林巴
   DP_SND_MUSICBOX = 9,  // 八音盒
   DP_SND_CHIME = 10,    // 轻风铃
-  DP_SND_COUNT = 11,
+  DP_SND_RAIN = 11,     // 雨声
+  DP_SND_BIRD = 12,     // 远处鸟鸣
+  DP_SND_COUNT = 13,
 };
 
 // 初始化 I2S + ES8311。失败只打日志、不阻塞启动：后续 play 全是空操作。
@@ -45,6 +47,10 @@ void audioPlayEvent(bool complete);
 
 // 界面/配网页显示用："水滴" / "木琴" / "关" …
 const char* audioModeLabel(uint8_t mode);
+
+// 音量 0..100（持久化在 NVS）
+uint8_t audioVolume();
+void audioSetVolume(uint8_t v);
 
 // "水滴 / 海浪" 这种合并标签，给信息页一行显示用（静态缓冲，别长期持有）
 const char* audioPairLabel();
