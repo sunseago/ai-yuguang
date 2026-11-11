@@ -51,6 +51,3 @@ const char* audioModeLabel(uint8_t mode);
 // 音量 0..100（持久化在 NVS）
 uint8_t audioVolume();
 void audioSetVolume(uint8_t v);
-
-// "水滴 / 海浪" 这种合并标签，给信息页一行显示用（静态缓冲，别长期持有）
-const char* audioPairLabel();

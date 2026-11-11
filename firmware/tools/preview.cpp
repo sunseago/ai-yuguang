@@ -130,7 +130,6 @@ int main() {
 
   // 设置页：音效网格 + 音量条（改布局常量后先看这张）
   in.page = 3;
-  in.sound = "水滴 / 海浪";
   in.sndSlot = 0;
   in.alertSnd = 1;
   in.doneSnd = 2;

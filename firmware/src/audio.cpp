@@ -45,13 +45,13 @@ const Partial kXylo[] = {{1.00f, 1.00f, 0.16f}, {3.00f, 0.38f, 0.07f}, {3.93f, 0
 const Partial kMarimba[] = {{1.00f, 1.00f, 0.40f}, {3.93f, 0.30f, 0.16f}, {9.20f, 0.10f, 0.06f}};
 // 软铃：非整数分音 + 慢衰减，柔和但有钟的余韵
 const Partial kSoftBell[] = {
-    {1.00f, 1.00f, 1.10f}, {2.00f, 0.50f, 0.75f}, {2.76f, 0.35f, 0.55f}, {5.40f, 0.14f, 0.30f}};
+    {1.00f, 1.00f, 0.75f}, {2.00f, 0.30f, 0.50f}, {2.76f, 0.14f, 0.32f}, {5.40f, 0.05f, 0.18f}};
 // 钢琴：整数谐波逐个衰减，二三次最明显
-const Partial kPiano[] = {{1.00f, 1.00f, 0.85f},
-                          {2.00f, 0.45f, 0.55f},
-                          {3.00f, 0.26f, 0.38f},
-                          {4.00f, 0.16f, 0.26f},
-                          {5.00f, 0.09f, 0.18f}};
+const Partial kPiano[] = {{1.00f, 1.00f, 0.70f},
+                          {2.00f, 0.32f, 0.48f},
+                          {3.00f, 0.14f, 0.30f},
+                          {4.00f, 0.06f, 0.20f},
+                          {5.00f, 0.03f, 0.14f}};
 // 竖琴：像钢琴但更"空"，高次谐波收得更快
 const Partial kHarp[] = {{1.00f, 1.00f, 0.75f},
                          {2.00f, 0.50f, 0.50f},
@@ -61,7 +61,7 @@ const Partial kHarp[] = {{1.00f, 1.00f, 0.75f},
 // 八音盒：基频很高 + 5.4 倍金属分音，衰减极快 = 脆
 const Partial kMusicBox[] = {{1.00f, 1.00f, 0.30f}, {5.40f, 0.32f, 0.11f}, {8.90f, 0.12f, 0.06f}};
 // 风铃单片：钟类分音，余音长
-const Partial kChime[] = {{1.00f, 1.00f, 0.90f}, {2.76f, 0.35f, 0.45f}, {5.40f, 0.15f, 0.22f}};
+const Partial kChime[] = {{1.00f, 1.00f, 0.80f}, {2.76f, 0.20f, 0.40f}, {5.40f, 0.05f, 0.18f}};
 
 struct Voice {
   float f0;
@@ -74,8 +74,8 @@ struct Voice {
 
 const Voice kVoiceXylo = {1046.0f, 0.45f, 0.0008f, kXylo, 3, 0.34f};
 const Voice kVoiceMarimba = {523.0f, 0.75f, 0.0015f, kMarimba, 3, 0.34f};
-const Voice kVoiceSoftBell = {784.0f, 1.40f, 0.0040f, kSoftBell, 4, 0.26f};
-const Voice kVoicePiano = {523.0f, 1.10f, 0.0012f, kPiano, 5, 0.24f};
+const Voice kVoiceSoftBell = {587.0f, 1.00f, 0.0070f, kSoftBell, 4, 0.30f};
+const Voice kVoicePiano = {392.0f, 1.00f, 0.0016f, kPiano, 5, 0.28f};
 const Voice kVoiceHarp = {440.0f, 1.00f, 0.0020f, kHarp, 5, 0.26f};
 const Voice kVoiceMusicBox = {1760.0f, 0.60f, 0.0006f, kMusicBox, 3, 0.30f};
 
@@ -125,14 +125,14 @@ float waveSample(float t, float& lp) {
 
 // 轻风铃：5 片错开敲击，音高不同，像一阵风拂过
 constexpr int kChimeN = 5;
-const float kChimeF[kChimeN] = {1568.0f, 1760.0f, 2093.0f, 2349.0f, 2794.0f};
-const float kChimeAt[kChimeN] = {0.00f, 0.13f, 0.27f, 0.42f, 0.58f};
+const float kChimeF[kChimeN] = {1175.0f, 1319.0f, 1568.0f, 1760.0f, 2093.0f};
+const float kChimeAt[kChimeN] = {0.00f, 0.16f, 0.34f, 0.52f, 0.72f};
 float chimeSample(float t) {
   float sum = 0;
   for (int i = 0; i < kChimeN; i++) {
     const float dt = t - kChimeAt[i];
     if (dt <= 0) continue;
-    const Voice v = {kChimeF[i], 2.0f, 0.0015f, kChime, 3, 0.14f};
+    const Voice v = {kChimeF[i], 2.0f, 0.0025f, kChime, 3, 0.15f};
     sum += additive(dt, v);
   }
   return sum;
@@ -181,7 +181,7 @@ float birdSample(float t, float& phase) {
 float durOf(uint8_t kind) {
   switch (kind) {
     case DP_SND_WAVE: return 1.70f;
-    case DP_SND_CHIME: return 2.00f;
+    case DP_SND_CHIME: return 1.60f;
     case DP_SND_RAIN: return 2.40f;
     case DP_SND_BIRD: return 1.00f;
     case DP_SND_SOFTBELL: return kVoiceSoftBell.dur;
@@ -419,9 +419,3 @@ void audioPlayEvent(bool complete) {
 }
 
 const char* audioModeLabel(uint8_t mode) { return dpSoundName(mode); }
-
-const char* audioPairLabel() {
-  static char buf[24];
-  snprintf(buf, sizeof(buf), "%s / %s", audioModeLabel(s_alert), audioModeLabel(s_done));
-  return buf;
-}

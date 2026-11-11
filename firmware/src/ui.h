@@ -19,7 +19,6 @@ struct UiInput {
   uint8_t rotation;    // 0..3，画面顺时针转了多少个 90°
   uint8_t rotOffset;   // 0..3，整体偏移（信息页现场校准用）
   bool imuOk;          // IMU 是否可用
-  const char* sound;   // 提示音摘要，如 "水滴 / 海浪"
   uint8_t sndSlot;     // 设置页正在编辑哪个槽：0=弹窗音 1=完成音
   uint8_t alertSnd;    // 弹窗音编号（0..12）
   uint8_t doneSnd;     // 完成音编号（0..12）

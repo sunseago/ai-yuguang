@@ -93,7 +93,6 @@ static void render() {
   in.rotation = displayRotation();
   in.rotOffset = imuOffset();
   in.imuOk = imuReady();
-  in.sound = audioPairLabel();
   in.sndSlot = gSndSlot;
   in.alertSnd = audioAlertMode();
   in.doneSnd = audioDoneMode();

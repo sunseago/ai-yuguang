@@ -362,15 +362,15 @@ void infoPage(Canvas& c, const UiInput& in) {
       {"wifi", in.wifiOk ? "connected" : "down"},
       {"power", in.power ? in.power : "-"},
       {"screen", bri},
-      {"sound", in.sound ? in.sound : "-"},
       {"tilt", tilt},
   };
-  // 7 行 + 3 行提示要塞进 240px，行距收到 18
-  int y = 54;
+  // 提示音不在这里显示：它有专门的设置页（两个槽 + 音量），这里再写一行
+  // "水滴 / 海浪" 会被误读成一个值带了个尾巴。
+  int y = 56;
   for (auto& r : rows) {
     c.text(10, y, r.k, dpcolor::FAINT, 1);
     c.textEllipsis(90, y, DP_W - 100, r.v, dpcolor::TEXT, 1);
-    y += 18;
+    y += 20;
   }
   c.hline(10, y + 2, DP_W - 20, dpcolor::LINE);
   c.text(10, y + 8, "tap BOOT = rotate 90", dpcolor::MUTED, 1);
@@ -392,9 +392,11 @@ void cellRect(int i, int& x, int& y) {
   y = kCellY + (i / kCellCols) * (kCellH + kCellGapY);
 }
 
-// 槽位切换胶囊
-constexpr int kSlotY = 26, kSlotH = 18, kSlotW = 44;
-constexpr int kSlotAX = 104, kSlotBX = 152;
+// 槽位切换胶囊。注意尺寸：字体实测 1 个汉字 16px 宽、16px 高，
+// "弹窗音" 48px 宽，所以 44px 的老胶囊装不下；高度也必须 ≥ 16 + 上下留白，
+// 否则字底会画到胶囊外面（之前看起来"字显示不全"就是这个）。
+constexpr int kSlotY = 25, kSlotH = 22, kSlotW = 64;
+constexpr int kSlotAX = 100, kSlotBX = 168;
 
 // 音量行
 constexpr int kVolY = 172, kVolH = 22;
@@ -409,11 +411,11 @@ void settingsPage(Canvas& c, const UiInput& in) {
   const bool alertSlot = (in.sndSlot == 0);
   c.fillRoundRect(kSlotAX, kSlotY, kSlotW, kSlotH, 9,
                   alertSlot ? dpcolor::TEXT : dpcolor::LINE);
-  c.textAligned(kSlotAX, kSlotY + 4, kSlotW, "弹窗",
+  c.textAligned(kSlotAX, kSlotY + (kSlotH - c.textHeight(1)) / 2, kSlotW, "弹窗音",
                 alertSlot ? dpcolor::BG : dpcolor::MUTED, 1, DP_CENTER);
   c.fillRoundRect(kSlotBX, kSlotY, kSlotW, kSlotH, 9,
                   alertSlot ? dpcolor::LINE : dpcolor::TEXT);
-  c.textAligned(kSlotBX, kSlotY + 4, kSlotW, "完成",
+  c.textAligned(kSlotBX, kSlotY + (kSlotH - c.textHeight(1)) / 2, kSlotW, "完成音",
                 alertSlot ? dpcolor::MUTED : dpcolor::BG, 1, DP_CENTER);
 
   // 音效网格：0=关，1..12 种音色
@@ -423,7 +425,7 @@ void settingsPage(Canvas& c, const UiInput& in) {
     cellRect(i, x, y);
     const bool sel = (cur == (uint8_t)i);
     c.fillRoundRect(x, y, kCellW, kCellH, 6, sel ? dpcolor::TEXT : dpcolor::LINE);
-    c.textAligned(x, y + 8, kCellW, dpSoundName((uint8_t)i),
+    c.textAligned(x, y + (kCellH - c.textHeight(1)) / 2, kCellW, dpSoundName((uint8_t)i),
                   sel ? dpcolor::BG : dpcolor::TEXT, 1, DP_CENTER);
   }
 
