@@ -253,9 +253,6 @@ void overview(Canvas& c, const UiInput& in) {
   if (m.count == 0) {
     c.textAligned(0, 100, DP_W, "no providers", dpcolor::FAINT, 1, DP_CENTER);
   }
-  // 分页点
-  c.fillCircle(112, 230, 3, dpcolor::TEXT);
-  c.fillCircle(124, 230, 3, dpcolor::LINE);
 }
 
 void detail(Canvas& c, const UiInput& in) {
@@ -377,8 +374,31 @@ void infoPage(Canvas& c, const UiInput& in) {
   c.text(10, y + 22, "hold BOOT 5s = re-pair", dpcolor::MUTED, 1);
   c.text(10, y + 36, "hold PLUS = sound", dpcolor::MUTED, 1);
 
-  c.fillCircle(112, 230, 3, dpcolor::LINE);
-  c.fillCircle(124, 230, 3, dpcolor::TEXT);
+}
+
+// ---------------- 分页点 ----------------
+// 三个并列页：0 总览 / 2 信息 / 3 设置。详情页（1）是"放大看某张卡"，
+// 不算并列页，不画点。
+//
+// 单独一个映射函数是必须的：page 编号里夹了个详情页，直接用 page 当点下标
+// 会整体错位。以后再加页面，只改这里一处。
+int pageSlot(int page) {
+  switch (page) {
+    case 0: return 0;
+    case 2: return 1;
+    case 3: return 2;
+    default: return -1;
+  }
+}
+
+void drawPageDots(Canvas& c, int slot) {
+  if (slot < 0) return;
+  constexpr int kDotR = 3, kPitch = 11, kY = 233, kN = 3;
+  // y=233 而不是 230：设置页底部那行提示占到 228，放 230 会压上去。
+  const int x0 = DP_W / 2 - (kN - 1) * kPitch / 2;
+  for (int i = 0; i < kN; i++) {
+    c.fillCircle(x0 + i * kPitch, kY, kDotR, i == slot ? dpcolor::TEXT : dpcolor::LINE);
+  }
 }
 
 // ---------------- 设置页：音效选择 + 音量 ----------------
@@ -484,6 +504,7 @@ void uiRender(Canvas& c, const UiInput& in) {
   } else {
     overview(c, in);
   }
+  drawPageDots(c, pageSlot(in.page));
 }
 
 int uiHitCard(const DpModel& m, int x, int y) {
