@@ -18,6 +18,15 @@ import path from 'node:path';
 
 const TAIL_BYTES = 128 * 1024;
 
+// 只有 approval 才是"要用户点确认"。
+// user_tool 是 agent 调工具时的往返（几秒内自动 resolved）—— 2026-11-12 实测：
+// 一次普通任务里 agent 连着调了 5 次工具，每次 request→resolved 之间有 4~7 秒，
+// 当成审批会让卡片每几秒红闪+响一次。把 user_tool 也算进去 = 误报机器。
+const USER_APPROVAL_KINDS = new Set(['approval']);
+
+// 刚出现不足这么久的新 request 不报：用户秒点确认时别闪一下
+const MIN_PENDING_AGE_MS = 1500;
+
 /** 纯函数：把一段 wire 文本（允许开头是半行）解析成信号，便于单测。 */
 export function parseWireText(text) {
   let pending = null;
@@ -40,7 +49,7 @@ export function parseWireText(text) {
         if (o.id) resolved.add(o.id);
         break;
       case 'interaction.request':
-        if (o.id) {
+        if (o.id && USER_APPROVAL_KINDS.has(String(o.kind || ''))) {
           pending = {
             id: o.id,
             kind: o.kind || '',
@@ -135,7 +144,9 @@ export function findConversationWire(appDataDir, conversationKey) {
       if (conversationKey && key === conversationKey && (!best || mtime > best.mtime)) best = item;
     }
   }
-  return best || fallback;
+  // 指定了会话却没找到它 —— 不要退回别的会话：那份 wire 的 turn.ended 属于
+  // 另一个任务，会造成"这边在跑、那边刚结束"的假 DONE。
+  return conversationKey ? best : fallback;
 }
 
 /**
@@ -157,7 +168,11 @@ export function createWireReader(appDataDir) {
         // 事件流格式变了/正在写入：安静退化，不影响额度与其它 provider
       }
       cache.set(found.wire, { mtime: found.mtime, result });
-      return { ...result, key: found.key };
+      // 宽限：刚出现的 request 先不报，等它"悬着"够久才算真的在等你
+      const pending = result.pending && Date.now() - result.pending.time >= MIN_PENDING_AGE_MS
+        ? result.pending
+        : null;
+      return { ...result, pending, key: found.key };
     },
   };
 }

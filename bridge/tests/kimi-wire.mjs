@@ -79,7 +79,8 @@ const ended = (time) => line({ type: 'agent.turn.ended', outcome: 'done', time }
 
   const found = findConversationWire(dir, 'agent:main:main:conversation:abc');
   ok('按 conversationKey 找到 wire', !!found && found.key === 'agent:main:main:conversation:abc');
-  ok('找不到的 key 会回退到最近会话', !!findConversationWire(dir, 'nope'));
+  // 2026-11-12 改：指定了会话却找不到时不跨会话回退（否则会拿别的任务的 turn.ended 假报 DONE）
+  ok('找不到的 key 不跨会话回退', findConversationWire(dir, 'nope') === null);
 
   const reader = createWireReader(dir);
   ok('reader 读出挂起事件', reader.sample('agent:main:main:conversation:abc').pending?.id === 'live_req');
@@ -88,7 +89,33 @@ const ended = (time) => line({ type: 'agent.turn.ended', outcome: 'done', time }
   ok('mtime 变化后重新解析', reader.sample('agent:main:main:conversation:abc').pending === null);
 }
 
-// 8) 目录不存在时安静退化
+// 8) user_tool 不是"等用户确认"：agent 调工具的往返会误报
+{
+  const r = parseWireText([
+    line({ type: 'interaction.request', id: 'user_tool_1', kind: 'user_tool', time: 1000 }),
+  ].join('\n'));
+  ok('user_tool 的 request 不算 pending', r.pending === null);
+  const a = parseWireText([
+    line({ type: 'interaction.request', id: 'approval_1', kind: 'approval', time: 1000 }),
+  ].join('\n'));
+  ok('approval 的 request 才算 pending', a.pending?.id === 'approval_1');
+}
+
+// 9) 指定了会话却找不到它 → 不退回别的会话（避免跨会话假 DONE）
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kimi-nofallback-'));
+  const root = path.join(dir, 'daimon-share', 'daimon', 'runtime', 'kimi-code', 'home', 'sessions');
+  const conv = path.join(root, 'ws-1', 'conv-abc');
+  fs.mkdirSync(path.join(conv, 'agents', 'main'), { recursive: true });
+  fs.writeFileSync(path.join(conv, 'state.json'), JSON.stringify({
+    custom: { conversationKey: 'agent:main:main:conversation:abc' },
+  }));
+  fs.writeFileSync(path.join(conv, 'agents', 'main', 'wire.jsonl'), line({ type: 'agent.turn.ended', outcome: 'done', time: 9000 }) + '\n');
+  ok('找不到指定会话时返回 null（不跨会话）', findConversationWire(dir, 'agent:main:main:conversation:zzz') === null);
+  ok('没指定会话时才回退到最近的', !!findConversationWire(dir, null));
+}
+
+// 10) 目录不存在时安静退化
 {
   const reader = createWireReader(path.join(os.tmpdir(), 'definitely-not-here-' + Date.now()));
   const r = reader.sample(null);
