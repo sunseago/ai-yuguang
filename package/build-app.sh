@@ -1,12 +1,17 @@
 #!/bin/zsh
 # 把桥接打包成可双击运行的「AI余光」.app（菜单栏程序 + 内置 node）。
 #
-#   ./build-app.sh              构建到 dist/AI余光.app，并打一个 zip
+#   ./build-app.sh              构建并打一个 zip
 #   ./build-app.sh --dmg        额外生成 dmg
 #   ./build-app.sh --clean      先删掉 dist 再构建
 #
 # 产物是完全自包含的：不依赖系统 node，也不依赖 WorkBuddy 目录里的那份。
 # 代价是体积（node 二进制约 108 MB 打底）。
+#
+# 注意：构建用的 .app 放在隐藏目录 dist/.build/ 里，dist/ 只留 zip/dmg。
+# 之前 .app 直接躺在 dist/ 下，和 /Applications 里的安装包同 bundle id，
+# Spotlight / Launchpad 会显示成两个「AI余光」，还容易点到旧版本。
+# .build/ 里放 .metadata_never_index 让 Spotlight 也别去索引它。
 #
 # 命名：.app 文件名用「AI余光」，Finder 里看到的就是它；
 # 包内可执行文件仍叫 yuguang（ASCII），免得路径带中文给日志、ps、grep 添麻烦。
@@ -18,7 +23,8 @@ APP_NAME="yuguang"               # 包内可执行文件名（ASCII）
 BUNDLE_ID="cn.deskpulse.app"
 ROOT="$(cd .. && pwd)"          # deskpulse/
 DIST="$(pwd)/dist"
-APP="$DIST/$APP_TITLE.app"
+BUILD="$DIST/.build"              # 隐藏的构建目录，避免 Launchpad 出现第二个图标
+APP="$BUILD/$APP_TITLE.app"
 EXE="$APP/Contents/MacOS/$APP_NAME"
 
 NODE_BIN="${NODE_BIN:-$HOME/.workbuddy/binaries/node/versions/22.22.2-6/bin/node}"
@@ -52,6 +58,8 @@ command -v swiftc >/dev/null || { echo "缺 Swift 工具链：xcode-select --ins
 echo "==> 准备目录"
 drop "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/bridge"
+# 让 Spotlight 跳过这个隐藏目录（Launchpad 本来就不显示隐藏目录，这里再上一道保险）
+: > "$BUILD/.metadata_never_index"
 
 echo "==> 编译菜单栏程序（$(swiftc --version 2>/dev/null | head -1)）"
 swiftc -O -swift-version 5 \
@@ -133,7 +141,8 @@ fi
 cat <<EOF
 
 用法：
-  open "$APP"                     启动（菜单栏出现 ● AI余光）
+  open "$APP"                     本地试跑（隐藏目录，不会在 Launchpad 里多一个图标）
+  正式安装：把 $ZIP 解压后拖进 /Applications
   "$EXE" --install-login          设为登录自启
   "$EXE" --uninstall-login        取消
   "$EXE" --status                 命令行查状态（0=在线）

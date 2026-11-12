@@ -80,9 +80,14 @@ Kimi(余额 API + 进程)   ┘
 
 ```bash
 # 解压后把「AI余光」拖进 /Applications，或者：
-ditto package/dist/AI余光.app "/Applications/AI余光.app"
+unzip -q package/dist/AI余光-0.1.11.zip -d /tmp/
+cp -R "/tmp/AI余光.app" /Applications/
 open "/Applications/AI余光.app"
 ```
+
+> 只保留 `/Applications` 这一份。构建脚本会把 `.app` 放进隐藏的
+> `package/dist/.build/`，`dist/` 顶层只有 zip —— 否则两份同 bundle id 的
+> App 会在 Launchpad 里显示成两个「AI余光」，还容易点到旧版本。
 
 启动后菜单栏出现 `● AI余光`：绿点=在线、橙点=引擎在跑但探测不到、红点=引擎没起来。
 Dock 里没有图标（`LSUIElement=1`）。点开菜单是：
@@ -126,7 +131,7 @@ kill -9 $(lsof -nP -iTCP:8787 -sTCP:LISTEN | awk 'NR==2{print $2}')
 自己重新打包：
 
 ```bash
-cd package && ./build-app.sh     # 产出 dist/AI余光.app + dist/AI余光-0.1.2.zip
+cd package && ./build-app.sh     # 产出 dist/AI余光-<版本>.zip；临时 .app 在隐藏的 dist/.build/
 ```
 
 **图标**是「一只偏头用余光看人的眼睛」——名字叫 AI余光，所以画的是"看"，而且是斜着看。
@@ -579,7 +584,7 @@ deskpulse/
 │  └─ install-launchd.sh          常驻服务
 ├─ package/
 │  ├─ main.swift                  菜单栏程序（管引擎子进程）
-│  ├─ build-app.sh                打包 .app + zip
+│  ├─ build-app.sh                打包 zip（临时 .app 放 dist/.build/）
 │  └─ icon/
 │     ├─ build-icon.sh            素材 → 裁切 → iconset → icns
 │     ├─ make-icon.swift          裁掉水印、套 macOS 图标网格
