@@ -66,7 +66,7 @@ Kimi(余额 API + 进程)   ┘
 | 卡片提醒：等确认（红，30s）/ 刚完成（绿，10s）边框+胶囊同步闪 | ✅ 两相位预览已核对，详情页也同步 |
 | 弱网自恢复：3×15s 重连 + 配网页可自动退出 | ✅ 修掉「开机慢被误判成没网、卡在 SETUP MODE 出不来」 |
 | Mac 菜单栏 App（自带 node，一键安装） | ✅ 实测通过：开机自启 / 崩溃自愈 / 孤儿进程回收 |
-| agent 弹框时卡片红闪提醒 | ✅ WorkBuddy / DeepSeek Harness 已端到端验证；Kimi 不支持 |
+| agent 弹框时卡片红闪提醒 | ✅ 三家都支持（Kimi 走 wire 事件配对，见下） |
 | 阈值蜂鸣、OTA、USB 兜底通道 | ⬜ 未做（原 P1） |
 
 ---
@@ -418,10 +418,28 @@ approval/decided  { id, outcome }                    ← allowed-once / denied�
 dsh 的在 `adapters/dsh.mjs` 的事件状态机里。各自有单测（`tests/approval.mjs`、
 `tests/dsh-approval.mjs`），都不需要那两个 app 装在本机。
 
-**Kimi 还不支持。** 它是 Electron 应用，权限框只活在渲染层、磁盘上不留痕，
-只能走 macOS 辅助功能 API 读窗口——要用户授权且容易随版本更新打掉，暂时不做。
+**Kimi（2026-11-12 起支持）。** 之前判断"权限框只活在渲染层"是错的 —— 桌面端会把
+会话事件流写到 `kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/<ws>/conv-*/agents/main/wire.jsonl`：
 
-配色和呼吸节奏集中在 `ui.cpp` 的 `badgeStyle()` / `awaitingLit()` / `kAwaitBlinkMs` 几处，
+| 事件 | 含义 |
+| --- | --- |
+| `interaction.request`（`kind: approval` / `user_tool`） | 弹窗出现，带 `id`、`toolName`、`display.description` |
+| `interaction.resolved`（同 `id`） | 用户点了确认/拒绝，弹窗消失 |
+| `agent.turn.ended`（`outcome: done`） | 任务完成，带 `time` |
+
+判定规则：某条 `interaction.request` 的 `id` 没有对应的 `resolved`、且没有更晚的
+`turn.ended` 把它作废 → `awaiting`，卡片红闪 + 水滴/所选提示音；
+`turn.ended` 在 10 秒内 → `done`，卡片绿闪 + 所选完成音。
+事件时间是 epoch ms，直接当 `state_since` 用，闪烁窗口和声音都会按它算。
+
+注意：**这是未公开格式**，Kimi 升级可能变。`bridge/lib/kimi-wire.mjs` 里所有读取都
+带 try/catch、只读尾部 128KB、按 mtime 缓存，解析失败会安静退化为原来的
+`thinking/idle`，不会把桥接带崩。三个不能用的信号（别走弯路）：
+`conversation-statuses.json` 弹窗时仍是 `running`；`ask-mode.json` 存的是会话模式不是当前弹窗；
+`runner.state.json` 的 `pendingInteractionCount` 不是实时字段。
+单测在 `tests/kimi-wire.mjs`（15 项），端到端也已用真实弹窗取证验证。
+
+配色和呼吸节奏集中在 `ui.cpp` 的 `badgeStyle()` / `stateLit()` / `flashWindowMs()` 几处，
 改颜色和闪多久只动那里。
 
 ### 6. 屏幕方向与供电

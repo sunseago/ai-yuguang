@@ -15,11 +15,18 @@ import path from 'node:path';
 import os from 'node:os';
 import { secretOf, readJson } from '../lib/util.mjs';
 import { createKimiQuota, DEFAULT_APP_DATA } from '../lib/kimi-session.mjs';
+import { createWireReader } from '../lib/kimi-wire.mjs';
 
 let apiDetail = null; // 开放平台余额（仅当走 API Key 时）
 let lastError = null;
 
 const localStorageQuota = createKimiQuota(readLocalCfg());
+// wire 事件流读取器按 appData 目录缓存，避免每次轮询重新枚举会话目录
+const wireReaders = new Map();
+function wireReaderFor(dir) {
+  if (!wireReaders.has(dir)) wireReaders.set(dir, createWireReader(dir));
+  return wireReaders.get(dir);
+}
 function readLocalCfg() {
   return { appDataPath: DEFAULT_APP_DATA };
 }
@@ -109,7 +116,16 @@ function readAgentSnapshot(cfg) {
   }
 
   const active = Object.entries(statuses).filter(([, s]) => ACTIVE_STATES.has(String(s)));
+  // 多个会话同时活动时，挑 updatedAt 最新的那个去对 wire 事件流
+  let activeKey = null;
+  let activeAt = -Infinity;
+  for (const [id] of active) {
+    const t = Date.parse(usage[id]?.updatedAt || '') || 0;
+    if (t >= activeAt) { activeAt = t; activeKey = id; }
+  }
+  if (!activeKey && active.length) activeKey = active[active.length - 1][0];
   return {
+    activeKey,
     contextTokens: latest?.contextTokens ?? null,
     maxContextTokens: latest?.maxContextTokens ?? null,
     model: latest?.model ?? null,
@@ -193,7 +209,23 @@ export async function readKimi(cfg = {}, store) {
     };
   }
 
-  if (snap.activeCount > 0) {
+  // ---- 弹窗 / 完成：从 wire.jsonl 的事件配对里读，比会话状态表准 ----
+  const wire = wireReaderFor(appDataDir(cfg)).sample(snap.activeKey);
+  const sameConv = !snap.activeKey || !wire.key || wire.key === snap.activeKey;
+  const pending = sameConv ? wire.pending : null;
+  const justEnded = wire.lastTurnEnded && Date.now() - wire.lastTurnEnded < 10000;
+
+  if (pending) {
+    provider.state = 'awaiting';
+    provider.state_since = pending.time || Date.now();
+    provider.task.tool = pending.toolName || (pending.kind === 'approval' ? 'approval' : 'kimi');
+    // 详情页能看到"在等什么"，比一句「会话进行中」有用得多
+    provider.task.title = pending.description || pending.action || '等待你确认';
+  } else if (justEnded) {
+    provider.state = 'done';
+    provider.state_since = wire.lastTurnEnded;
+    provider.task.title = '任务已完成';
+  } else if (snap.activeCount > 0) {
     provider.state = 'thinking';
     provider.state_since = snap.updatedAt ? Date.parse(snap.updatedAt) : Date.now();
     provider.task.tool = snap.model || 'kimi';
@@ -202,6 +234,17 @@ export async function readKimi(cfg = {}, store) {
     provider.task.tool = snap.model || 'kimi-desktop';
     // 标题只放会员等级：卡片那行还要拼状态前缀，太长会被截成「图像 2..」
     provider.task.title = st.membershipLevel != null ? `Lv.${st.membershipLevel}` : '桌面端已打开';
+  }
+
+  // 把弹窗细节带到 /v1/state（固件暂不渲染，调试和网页能看）
+  if (pending) {
+    provider.pending = {
+      id: pending.id,
+      kind: pending.kind,
+      tool: pending.toolName,
+      command: pending.action,
+      description: pending.description,
+    };
   }
 
   return provider;
