@@ -3,12 +3,22 @@
 // 一次权限弹框在 ~/.workbuddy/audit-log/YYYY-MM-DD.jsonl 里留下两条记录，
 // 靠 toolCallId 配对：
 //
-//   file-safety.needs-approval        ← 弹框出现（decision = info）
-//   file-safety.approved / .rejected  ← 你点了允许 / 拒绝
+//   *.needs-approval                  ← 弹框出现（decision = info）
+//   *.approved / .rejected            ← 你点了允许 / 拒绝
 //
 // 所以「有 needs-approval、但没有同 id 的 approved/rejected」= 此刻正在等你。
 // 实测样例（2026-11-07）：20:11:03 needs-approval → 20:11:15 approved，
 // 中间 12 秒就是人读弹框、再点允许的时间。
+//
+// 2026-11-12 起要**同时读 spool**：新版 WorkBuddy 把事件先写进
+// audit-log/spool/audit-spool-<pid>-<日期>.jsonl（每个进程一份），过一段时间
+// 才合并进每日文件。实测弹窗时段里 needs-approval 只存在于 spool、每日文件
+// 停在 1 小时前 —— 不读 spool 就会漏掉弹窗。spool 被合并清理后，pending 交给
+// 每日文件里的 resolution 或过期兜底。
+//
+// 注意（2026-11-12 实测）：**命令沙箱升级弹窗当前版本不写任何审计事件**
+// （只有文件类弹窗写），这类弹窗检测不到 —— watcher 不用改，WorkBuddy 哪天
+// 恢复落盘就自动生效。
 //
 // 这里只做解析，不碰数据库，所以可以在没有 WorkBuddy 的机器上单测
 // （见 tests/approval.mjs）。
@@ -41,38 +51,33 @@ function dayKey(d = new Date()) {
  * 每个 provider 用一个实例即可，内部按「日期 + 字节 offset」做增量。
  */
 export function createApprovalWatcher(getDir) {
-  const st = { key: '', file: '', offset: 0, pending: new Map(), seq: 0 };
+  // offsets 按「文件路径 → 已读字节」记：要看的不止一个文件
+  // （每日主文件 + 每个进程一份的 spool）
+  const st = { key: '', offsets: new Map(), pending: new Map(), seq: 0 };
 
-  function consume(cfg) {
-    const key = dayKey();
-    const file = path.join(getDir(cfg), `${key}.jsonl`);
-
-    // 跨天要换文件；昨天的框今天不该还闪，所以连 pending 一起清
-    if (st.key !== key || st.file !== file) {
-      st.key = key;
-      st.file = file;
-      st.offset = 0;
-      st.pending.clear();
-    }
-
+  function consumeOne(file) {
     let size;
     try {
       size = fs.statSync(file).size;
     } catch {
-      return; // 今天还没有任何审计记录
+      // 文件没了（spool 被合并清理）：丢掉 offset 即可，
+      // 未决的 pending 交给每日文件里的 resolution 或过期兜底
+      st.offsets.delete(file);
+      return;
     }
+    let offset = st.offsets.get(file) || 0;
     // 文件被截断或重建（日志轮转）
-    if (size < st.offset) {
-      st.offset = 0;
+    if (size < offset) {
+      offset = 0;
       st.pending.clear();
     }
-    if (size === st.offset) return;
+    if (size === offset) return;
 
-    const len = size - st.offset;
+    const len = size - offset;
     const buf = Buffer.alloc(len);
     const fd = fs.openSync(file, 'r');
     try {
-      fs.readSync(fd, buf, 0, len, st.offset);
+      fs.readSync(fd, buf, 0, len, offset);
     } finally {
       fs.closeSync(fd);
     }
@@ -81,7 +86,7 @@ export function createApprovalWatcher(getDir) {
     // 不这么处理的话，一次半行读取会把后面的 offset 也带偏。
     const nl = buf.lastIndexOf(0x0a);
     if (nl < 0) return;
-    st.offset += nl + 1;
+    st.offsets.set(file, offset + nl + 1);
 
     for (const line of buf.toString('utf8', 0, nl).split('\n')) {
       if (!line) continue;
@@ -100,6 +105,32 @@ export function createApprovalWatcher(getDir) {
         st.pending.set(id, { at: Number(o.timestamp) || Date.now(), seq: ++st.seq, kind: t });
       } else if (RESOLVED_SUFFIXES.some((s) => t.endsWith(s))) {
         st.pending.delete(id);
+      }
+    }
+  }
+
+  function consume(cfg) {
+    const key = dayKey();
+    // 跨天要换文件；昨天的框今天不该还闪，所以连 pending 一起清
+    if (st.key !== key) {
+      st.key = key;
+      st.offsets.clear();
+      st.pending.clear();
+    }
+    const dir = getDir(cfg);
+    // 每日主文件：老版本 WorkBuddy 直接写这里
+    consumeOne(path.join(dir, `${key}.jsonl`));
+    // spool：新版 WorkBuddy 事件先进 per-PID spool，合并进每日文件有延迟。
+    // 只按「当天日期后缀」收，跨天的 spool 自然失效。
+    let spools = [];
+    try {
+      spools = fs.readdirSync(path.join(dir, 'spool'));
+    } catch {
+      /* 没有 spool 目录 = 老版本，忽略 */
+    }
+    for (const f of spools) {
+      if (f.startsWith('audit-spool-') && f.endsWith(`-${key}.jsonl`)) {
+        consumeOne(path.join(dir, 'spool', f));
       }
     }
   }

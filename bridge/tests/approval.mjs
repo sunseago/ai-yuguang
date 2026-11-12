@@ -79,6 +79,39 @@ fs.appendFileSync(
 check('超过 5 分钟的未决判为过期', watch().poll(cfg, 300000) === null);
 check('放宽到 15 分钟后仍算等待', watch().poll(cfg, 900000) !== null);
 
+// ===== 8. spool 场景（2026-11-12 实测：新版 WorkBuddy 事件先进 per-PID spool，
+// 过一段时间才合并进每日文件 —— 弹窗事件在合并前只存在于 spool 里）=====
+const spoolDir = path.join(dir, 'spool');
+fs.mkdirSync(spoolDir, { recursive: true });
+const spoolFile = path.join(spoolDir, `audit-spool-999-${key}.jsonl`);
+
+fs.writeFileSync(spoolFile, ev({ eventType: 'command-safety.needs-approval', toolCallId: 's1' }));
+{
+  const w = watch();
+  const pp = w.poll(cfg);
+  check('弹窗事件只在 spool 里也能检出', !!pp && pp.kind === 'command-safety.needs-approval');
+
+  // 用户点了允许：resolution 落在同一个 spool 里
+  fs.appendFileSync(spoolFile, ev({ eventType: 'command-safety.approved', toolCallId: 's1' }));
+  check('spool 内的 resolution 会解除 pending', w.poll(cfg) === null);
+
+  // 模拟 spool 被合并清理：文件消失，新的 pending 出在每日文件里
+  fs.rmSync(spoolFile);
+  fs.appendFileSync(file, ev({ eventType: 'file-safety.needs-approval', toolCallId: 's2' }));
+  const pp2 = w.poll(cfg);
+  check('spool 文件消失不影响新的 pending', !!pp2 && pp2.kind === 'file-safety.needs-approval');
+  fs.appendFileSync(file, ev({ eventType: 'file-safety.approved', toolCallId: 's2' }));
+  check('resolution 落在每日文件也能解除', w.poll(cfg) === null);
+}
+
+// ===== 9. 跨天的 spool 不收（文件名带日期后缀，只收当天的）=====
+{
+  const yesterday = path.join(spoolDir, 'audit-spool-888-2020-01-01.jsonl');
+  fs.writeFileSync(yesterday, ev({ eventType: 'file-safety.needs-approval', toolCallId: 'old' }));
+  check('跨天 spool 不收', watch().poll(cfg) === null);
+  fs.rmSync(yesterday);
+}
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
 process.exit(fails === 0 ? 0 : 1);

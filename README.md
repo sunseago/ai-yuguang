@@ -429,6 +429,26 @@ approval/decided  { id, outcome }                    ← allowed-once / denied�
 dsh 的在 `adapters/dsh.mjs` 的事件状态机里。各自有单测（`tests/approval.mjs`、
 `tests/dsh-approval.mjs`），都不需要那两个 app 装在本机。
 
+两个 2026-11-12 实测出的注意事项：
+
+1. **WorkBuddy 事件先进 spool**：新版把审计事件写进 `audit-log/spool/audit-spool-<pid>-<日期>.jsonl`
+   （每个进程一份），过一段时间才合并进每日文件 —— 弹窗事件在合并前只存在于 spool 里。
+   `approval.mjs` 现在每日文件和当天的 spool 一起增量读，spool 被合并清理后由
+   每日文件里的 resolution 或过期兜底。
+2. **命令沙箱升级弹窗当前版本不落审计日志**：只有文件类弹窗（删除、批量操作）会写
+   `*.needs-approval`。所以命令类弹窗的闪烁/声音暂时检测不到 —— watcher 不用改，
+   WorkBuddy 哪天恢复落盘就自动生效。
+
+两个 2026-11-12 实测出的注意事项：
+
+1. **WorkBuddy 事件先进 spool**：新版把审计事件写进 `audit-log/spool/audit-spool-<pid>-<日期>.jsonl`
+   （每个进程一份），过一段时间才合并进每日文件 —— 弹窗事件在合并前只存在于 spool 里。
+   `approval.mjs` 现在每日文件和当天的 spool 一起增量读，spool 被合并清理后由
+   每日文件里的 resolution 或过期兜底。
+2. **命令沙箱升级弹窗当前版本不落审计日志**：只有文件类弹窗（删除、批量操作）会写
+   `*.needs-approval`。所以命令类弹窗的闪烁/声音暂时检测不到 —— watcher 不用改，
+   WorkBuddy 哪天恢复落盘就自动生效。
+
 **Kimi（2026-11-12 起支持）。** 之前判断"权限框只活在渲染层"是错的 —— 桌面端会把
 会话事件流写到 `kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/<ws>/conv-*/agents/main/wire.jsonl`：
 
