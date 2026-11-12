@@ -454,12 +454,15 @@ dsh 的在 `adapters/dsh.mjs` 的事件状态机里。各自有单测（`tests/a
 
 | 事件 | 含义 |
 | --- | --- |
-| `interaction.request`（`kind: approval` / `user_tool`） | 弹窗出现，带 `id`、`toolName`、`display.description` |
+| `interaction.request`（`kind: approval`） | **要用户点确认**，带 `id`、`toolName`、`display.description` |
+| `interaction.request`（`kind: user_tool`） | agent 调工具的往返，几秒内自动 resolved —— **不算弹窗** |
 | `interaction.resolved`（同 `id`） | 用户点了确认/拒绝，弹窗消失 |
 | `agent.turn.ended`（`outcome: done`） | 任务完成，带 `time` |
 
-判定规则：某条 `interaction.request` 的 `id` 没有对应的 `resolved`、且没有更晚的
-`turn.ended` 把它作废 → `awaiting`，卡片红闪 + 水滴/所选提示音；
+判定规则：**只有 `kind: approval`** 才算弹窗 —— `user_tool` 是 agent 调工具的往返，
+2026-11-12 实测一次普通任务里连着 5 次，每次有 4~7 秒未决窗口，当成弹窗会让卡片
+每几秒误闪误响一次。且它的 `id` 没有对应的 `resolved`、没有更晚的 `turn.ended`
+把它作废、且已悬着超过 1.5 秒 → `awaiting`，卡片红闪 + 水滴/所选提示音；
 `turn.ended` 在 10 秒内 → `done`，卡片绿闪 + 所选完成音。
 事件时间是 epoch ms，直接当 `state_since` 用，闪烁窗口和声音都会按它算。
 
