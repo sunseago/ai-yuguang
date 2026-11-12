@@ -1,0 +1,5 @@
+# 生成物（可用 generate.py + 无头 Chrome 重出），只留矢量源与生成脚本
+*.png
+!C_三束余光.png
+contact.html
+small.html
