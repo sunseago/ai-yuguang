@@ -232,6 +232,7 @@ func disableLogin() {
 // ---------- 桥接子进程 ----------
 final class Engine {
     private(set) var child: Process?
+    private var recheck: DispatchWorkItem?   // 外部实例消失后的延迟复查（见 start()）
     /// 端口上的实例不是我们起的（比如用户手动 node 起的），这时不抢
     var external = false
     var shouldRun = true
@@ -241,13 +242,42 @@ final class Engine {
         if probe().up {
             external = true
             child = nil
+            // 热替换场景：换 .app 时旧实例的桥接可能还没退干净，此刻 probe()
+            // 会误判成"外部实例占用"，于是自己不拉起 —— 旧桥接一退就没人服务了
+            // （2026-11-12 实际踩到：替换运行中的 App 后桥接消失，只能再开一次）。
+            // 所以每隔几秒复查一次，端口空了就自己拉起。
+            scheduleExternalRecheck()
             return
         }
         external = false
         spawn()
     }
 
+    /// probe() 在调用线程等信号量（最多 1.5s），主线程调它会把菜单卡住，
+    /// 所以复查放后台队列；检测到端口释放后回主线程走原来的 spawn() 路径。
+    private func scheduleExternalRecheck(attempt: Int = 0) {
+        recheck?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.shouldRun, self.child == nil else { return }
+            if probe().up {
+                // 还占着：继续等（最多 20 次 × 3s = 一分钟，之后认命，
+                // 用户从菜单里点"重启引擎"还能救）
+                if attempt < 20 { self.scheduleExternalRecheck(attempt: attempt + 1) }
+                return
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.shouldRun, self.child == nil else { return }
+                self.external = false
+                self.spawn()
+            }
+        }
+        recheck = item
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3, execute: item)
+    }
+
     func stop() {
+        recheck?.cancel()
+        recheck = nil
         shouldRun = false
         if let c = child, c.isRunning {
             c.terminate()
@@ -279,6 +309,10 @@ final class Engine {
     }
 
     private func spawn() {
+        // 自己已经拉起桥接了，挂着的"外部实例复查"就该停 —— 否则它会每 3 秒
+        // probe 一次然后无限排下去
+        recheck?.cancel()
+        recheck = nil
         guard let node = nodePath, let bridge = bridgePath else {
             NSLog("DeskPulse: bundle 里缺 node 或 bridge 脚本")
             return
