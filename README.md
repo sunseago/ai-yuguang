@@ -697,6 +697,7 @@ python3 tools/gen_font.py unifont.hex src/font_data.h
 | 自动转屏方向不对（四个方向整体偏） | 不用重烧：翻到信息页短按 BOOT 循环偏移，选到正为止（自动存 NVS）。只想改出厂默认就改 `src/board_config.h` 的 `IMU_ROT_OFFSET` |
 | 自动转屏相对关系不对（某两个方向差 90° 而不是 180°） | 那不是偏移问题，是象限映射或 `rotate.h` 的公式错了，先跑 `tools/test_rotation.cpp` |
 | 关掉 WorkBuddy 后卡片一直卡在 `THINKING`（红标签、耗时一直涨） | 已修：`workbuddy.mjs` 之前只看 `sessions.status` 不看时间，进程被关掉后 DB 里残留 `working` 会一直报 thinking。现在套 `idleAfterMs`（默认 5 分钟无活动降为 `IDLE`），和 `dsh.mjs` 一致 |
+| 两个会话并行时卡片显示错的那个；长工具调用期间卡片掉回 `IDLE` | 已修（2026-11-12）：① 新鲜度改用 `max(last_activity_at, updated_at)` —— WorkBuddy 跑工具时只动 `updated_at`，只看前者会把 5 分钟阈值误判；② 选会话改为优先「进行中且未超时」的，其次才是最近写库的（`pickLiveSession`，单测 `tests/workbuddy-pick.mjs`）。不然刚结束的会话会把还跑着的挤下卡片 |
 | 板子显示 `NO LINK` | 桥接没在跑。`curl 127.0.0.1:8787/healthz` 探一下；电脑睡眠也会导致这个 |
 | `NO LINK` 时界面卡死、点击滑动丢、转屏要等很久 | 已修（0.1.2）。根因是 `http.GET()` 同步阻塞、超时 2.5 秒，而它原来跑在 `loop()` 里：主机**可达但不回应**（Mac 睡眠、Wi-Fi 半断）时，每 2 秒冻结界面 2.5 秒，触摸（边沿检测）和 IMU 轮询（200ms×5 次）全被饿死。现在网络搬进 core 0 的独立任务，UI 只读快照。自查只看心跳的 `gap=`：正常几十毫秒 |
 | 屏一直亮着，人不在电脑前也不变暗 | 桥接没送 `host.idle_s`。`curl -s 127.0.0.1:8787/v1/state \| python3 -m json.tool \| grep idle` 看一眼；-1 表示 `ioreg` 读不到，设备会当作「人在用」保守不熄 |

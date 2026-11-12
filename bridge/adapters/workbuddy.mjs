@@ -80,6 +80,24 @@ function sumCredits(handle, sinceMs) {
   return total;
 }
 
+/**
+ * 从按 fresh_at 降序的会话列表里挑一张上卡片的会话。
+ * 优先「还活着」的（状态在进行中、且按 fresh_at 看没超时），其次才是最近写库的。
+ * 抽成纯函数是为了能离线单测 —— 真库要靠 WorkBuddy 在写，测不出并行场景。
+ * @returns 选中的行，rows 为空返回 null。
+ */
+export function pickLiveSession(rows, idleAfterMs, nowMs) {
+  if (!rows || !rows.length) return null;
+  for (const r of rows) {
+    const st = String(r.status || '').toLowerCase();
+    const fresh = nowMs - Number(r.fresh_at || 0);
+    if ((st === 'working' || st === 'running' || st === 'pending') && fresh <= idleAfterMs) {
+      return r;
+    }
+  }
+  return rows[0];
+}
+
 export function readWorkBuddy(cfg, opts) {
   const provider = {
     id: 'workbuddy',
@@ -99,32 +117,38 @@ export function readWorkBuddy(cfg, opts) {
     // 也不能漏掉此刻正在等的弹框 —— 旧实现会在这里提前 return 跳过检测。
     const appr = approvals.poll(cfg, opts?.awaitExpireMs ?? 300000);
 
-    const row = handle
+    // fresh_at = max(last_activity_at, updated_at)：WorkBuddy 跑工具的过程中
+    // 只更新 updated_at，不动 last_activity_at —— 只看后者会把长工具调用
+    // 误判成「5 分钟没活动 = idle」，卡片明明在跑却掉回灰色。
+    const rows = handle
       .prepare(
         `SELECT s.id, COALESCE(NULLIF(s.custom_title, ''), s.title) AS title,
                 s.status, s.model, s.context_window,
-                COALESCE(s.last_activity_at, s.updated_at) AS last_at
+                COALESCE(s.last_activity_at, s.updated_at) AS last_at,
+                MAX(COALESCE(s.last_activity_at, 0), COALESCE(s.updated_at, 0)) AS fresh_at
            FROM sessions s
           WHERE s.deleted_at IS NULL OR s.deleted_at = 0
-          ORDER BY last_at DESC
-          LIMIT 1`
+          ORDER BY fresh_at DESC
+          LIMIT 5`
       )
-      .get();
+      .all();
 
-    if (!row) {
+    if (!rows.length) {
       provider.state = appr ? 'awaiting' : 'idle';
       if (appr) provider.state_since = appr.at;
       provider.health = 'ok';
       return provider;
     }
 
+    const idleAfterMs = opts?.idleAfterMs ?? 300000;
+    const row = pickLiveSession(rows, idleAfterMs, Date.now());
+
     const usage = handle
       .prepare('SELECT used, size, updated_at FROM session_usage WHERE session_id = ?')
       .get(row.id);
 
-    const ageMs = Date.now() - Number(row.last_at || 0);
+    const ageMs = Date.now() - Number(row.fresh_at || 0);
     const st = String(row.status || '').toLowerCase();
-    const idleAfterMs = opts?.idleAfterMs ?? 300000;
 
     if (st === 'working' || st === 'running' || st === 'pending') {
       // 会话状态写着"进行中"，但很久没有新活动了 —— 多半是 WorkBuddy 被关掉、
