@@ -223,6 +223,9 @@ void setup() {
       } else if (p.quotaKind == DP_Q_CREDIT) {
         Serial.printf("[dp]   #%d %s state=%s credit=%.2f/%.2f\n", i, p.name,
                       dpStateLabel(p.state), p.used, p.budget);
+      } else if (p.quotaKind == DP_Q_CTX) {
+        Serial.printf("[dp]   #%d %s state=%s ctx=%.0f/%.0f\n", i, p.name,
+                      dpStateLabel(p.state), p.used, p.budget);
       } else {
         Serial.printf("[dp]   #%d %s state=%s quota=none\n", i, p.name, dpStateLabel(p.state));
       }
@@ -296,6 +299,9 @@ void loop() {
         // 余额/总额（老桥接没有 remaining 时退回已用）
         hb.addf(" | %s:%s %.0f/%.0f", p.id, dpStateLabel(p.state),
                 p.remaining >= 0 ? p.remaining : p.used, p.budget);
+      } else if (p.quotaKind == DP_Q_CTX) {
+        hb.addf(" | %s:%s %.0fk/%.0fk", p.id, dpStateLabel(p.state), p.used / 1000.0f,
+                p.budget / 1000.0f);
       } else {
         hb.addf(" | %s:%s", p.id, dpStateLabel(p.state));
       }

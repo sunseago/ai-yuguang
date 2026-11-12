@@ -154,16 +154,14 @@ export async function readKimi(cfg = {}, store) {
   if (useLocal && st.usage) {
     const q = st.usage[cfg.quotaSource === 'image' ? 'image' : 'research'] || st.usage.image;
     if (q) {
-      const used = q.used;
-      const budget = q.total;
-      provider.quota = {
-        kind: 'credit',
-        used,
-        budget,
-        remaining: q.remain,
-        unit: '次',
+      // 每日次数挪到 quota_detail：卡片主位已换成上下文占用，
+      // 50/50 这种几乎恒定的数字没有信息量。历史照记（store.append），burn 还能算。
+      provider.quota_detail = {
         label: cfg.quotaSource === 'image' ? '今日图像' : '今日研究',
-        // 固件不读这些字段，但 /v1/state 的调用方（调试、网页）用得上
+        used: q.used,
+        total: q.total,
+        remain: q.remain,
+        unit: '次',
         detail: {
           research: st.usage.research,
           image: st.usage.image,
@@ -173,15 +171,15 @@ export async function readKimi(cfg = {}, store) {
         age_s: st.refreshedAt ? Math.round((Date.now() - st.refreshedAt) / 1000) : null,
       };
       const avg = store ? store.avgDaily('kimi') : 0;
-      provider.quota.avg_daily = Math.round(avg * 100) / 100;
+      provider.quota_detail.avg_daily = Math.round(avg * 100) / 100;
       provider.health = 'ok';
     } else {
       provider.health = 'unknown';
     }
     provider.source = 'local:kimi-desktop/usage';
   } else if (apiDetail) {
-    provider.quota = {
-      kind: 'balance',
+    provider.quota_detail = {
+      label: '开放平台余额',
       remaining: Math.round(apiDetail.available * 100) / 100,
       cash: Math.round(apiDetail.cash * 100) / 100,
       voucher: Math.round(apiDetail.voucher * 100) / 100,
@@ -192,11 +190,11 @@ export async function readKimi(cfg = {}, store) {
     provider.source = 'api:moonshot/balance';
   } else {
     provider.health = 'unknown';
-    provider.quota = { kind: 'balance', remaining: null, currency: 'CNY' };
     if (lastError) provider.error = lastError;
   }
 
-  // 上下文占用：有值就带给上层（固件暂未渲染，网页/调试可用）
+  // 上下文占用：卡片主位就是它 —— 快满（>90%）该开新会话了，
+  // 比每日研究次数那种几乎恒定的数字有用得多。
   if (snap.contextTokens != null) {
     provider.context = {
       used: snap.contextTokens,
@@ -207,6 +205,17 @@ export async function readKimi(cfg = {}, store) {
       model: snap.model,
       updated_at: snap.updatedAt,
     };
+    if (snap.maxContextTokens) {
+      provider.quota = {
+        kind: 'ctx',
+        used: snap.contextTokens,
+        size: snap.maxContextTokens,
+        remaining: Math.max(0, snap.maxContextTokens - snap.contextTokens),
+        model: snap.model,
+        updated_at: snap.updatedAt,
+      };
+      provider.health = 'ok';
+    }
   }
 
   // ---- 弹窗 / 完成：从 wire.jsonl 的事件配对里读，比会话状态表准 ----

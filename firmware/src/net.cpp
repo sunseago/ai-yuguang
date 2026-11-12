@@ -397,6 +397,13 @@ bool netFetch(DpModel& m) {
       // 真实剩余积分；旧桥接没有这个字段时给 -1，UI 退回显示"已用/预算"
       d.remaining = q["remaining"] | -1.0f;
       d.hasQuota = true;
+    } else if (!strcmp(kind, "ctx") && q["size"].is<float>()) {
+      // Kimi：当前会话上下文占用。每日研究次数那种几乎不动的数字不上主位。
+      d.quotaKind = DP_Q_CTX;
+      d.used = q["used"] | 0.0f;
+      d.budget = q["size"] | 0.0f;
+      d.remaining = q["remaining"] | -1.0f;
+      d.hasQuota = true;
     }
 
     d.jobs = (int16_t)(p["jobs"] | 0);

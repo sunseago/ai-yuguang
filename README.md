@@ -551,7 +551,7 @@ g++ -std=c++17 -O1 -I src -o /tmp/scr tools/test_screenlogic.cpp && /tmp/scr   #
 | --- | --- | --- | --- |
 | WorkBuddy | `~/.workbuddy/workbuddy.db` 的 `sessions.status` + `session_usage` | **官方剩余积分**（`/billing/meter/get-user-resource-summary`，与客户端顶部一致） | 客户端把 token 存成 at-rest 信封，桥接借 WorkBuddy 自带 Electron 运行时解密并代发请求（`bridge/tools/wb-oracle`），每 5 分钟取一次；取不到时退回「预算 − 本地已用」估算（`quota.source` 会标 `local-estimate`） |
 | DeepSeek Harness | `~/.dsh/sessions/*/session-*.jsonl.zstd` 事件流（turn/step/tool/job） | Platform 钱包余额（充值 + 赠送） | 进度精确；余额读 `~/.dsh/.credentials.yaml` 的登录态，**无需 API Key**，和桌面端显示同一个数 |
-| Kimi | 进程存活 + `kimi-agent/` 的会话状态与上下文占用 | 每日「深度研究 / 图像生成」剩余次数 | **进度是估算**（桌面端没有明文会话日志）；额度读桌面版本地登录态，**无需 API Key** |
+| Kimi | 进程存活 + `kimi-agent/` 会话状态 + **`wire.jsonl` 事件配对**（弹窗/完成）| **当前会话上下文占用**（如 `202k/262k`）—— 快满（>90%）该开新会话了 | 上下文从 `conversation-context-usage.json` 读，随使用实时变化；每日「研究/图像」次数挪到 `/v1/state` 的 `quota_detail`（每天重置的数字不适合上主位）|
 
 > WorkBuddy 卡片的数字是**剩余积分**（如 `2012 left`，详细页是 `2012/3229`），
 > 进度条也是余额占比。取数依赖本机 WorkBuddy 客户端已登录；不想要这条链路

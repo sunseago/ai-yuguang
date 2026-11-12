@@ -117,6 +117,13 @@ void fmtDuration(char* out, size_t n, uint64_t ms) {
   else snprintf(out, n, "%uh%02um", (unsigned)(s / 3600), (unsigned)((s % 3600) / 60));
 }
 
+// token 数格式化：202195 -> "202k"，1234567 -> "1.2M"，860 -> "860"
+void fmtTokens(char* out, size_t n, float v) {
+  if (v >= 1000000) snprintf(out, n, "%.1fM", v / 1000000.0f);
+  else if (v >= 1000) snprintf(out, n, "%.0fk", v / 1000.0f);
+  else snprintf(out, n, "%.0f", v);
+}
+
 void statusBar(Canvas& c, const UiInput& in) {
   bool online = in.model->bridgeOnline && in.wifiOk;
   c.fillRect(0, 0, DP_W, kBarY, dpcolor::BG);
@@ -161,6 +168,14 @@ void quotaLine(const DpProvider& p, char* prefix, size_t prefixN, char* big, siz
     fmtMoney(val, sizeof(val), p.remaining >= 0 ? p.remaining : p.used);
     fmtMoney(total, sizeof(total), p.budget);
     snprintf(big, bigN, "%s", val);
+    snprintf(small, smallN, "/%s", total);
+  } else if (p.quotaKind == DP_Q_CTX) {
+    // Kimi：当前会话上下文占用。快满（>90%）就该开新会话了，
+    // 比每日研究次数那种几乎不动的数字有用得多。
+    char used[12], total[12];
+    fmtTokens(used, sizeof(used), p.used);
+    fmtTokens(total, sizeof(total), p.budget);
+    snprintf(big, bigN, "%s", used);
     snprintf(small, smallN, "/%s", total);
   }
 }
@@ -323,7 +338,7 @@ void detail(Canvas& c, const UiInput& in) {
     char burn[32] = "";
     if (p.hasBurn && p.burnDays > 0) snprintf(burn, sizeof(burn), "%.0fd left", p.burnDays);
     if (burn[0]) c.textAligned(120, y, 110, burn, dpcolor::MUTED, 1, DP_RIGHT);
-  } else if (p.quotaKind == DP_Q_CREDIT) {
+  } else if (p.quotaKind == DP_Q_CTX) {
     c.text(10, y, big, dpcolor::TEXT, 1);
     c.text(10 + c.textWidth(big, 1) + 2, y, small, dpcolor::FAINT, 1);
     if (p.hasCtx && p.ctxSize > 0) {

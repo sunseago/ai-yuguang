@@ -24,6 +24,7 @@ enum DpQuotaKind : uint8_t {
   DP_Q_NONE = 0,
   DP_Q_CREDIT,
   DP_Q_BALANCE,
+  DP_Q_CTX,   // 会话上下文占用（Kimi）：used=已用 token，budget=上限
 };
 
 struct DpProvider {
