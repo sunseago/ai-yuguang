@@ -24,6 +24,7 @@ struct UiInput {
   uint8_t doneSnd;     // 完成音编号（0..12）
   uint8_t volume;      // 0..100
   bool volFocus;       // 长按 PLUS 进来的：高亮音量条
+  uint32_t offInMs;    // 断链后距离自动关机还剩多久（0 = 不计时，状态栏显示 RETRY）
 };
 
 void uiRender(Canvas& c, const UiInput& in);

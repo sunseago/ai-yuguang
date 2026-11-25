@@ -128,6 +128,15 @@ int main() {
   uiRender(gCanvas, in);
   writePPM("preview_info.ppm", gBuf);
 
+  // 断链倒计时：状态栏右上角应该显示 "OFF 4:03" 而不是 RETRY
+  in.page = 0;
+  in.wifiOk = false;
+  in.offInMs = 243000;
+  uiRender(gCanvas, in);
+  writePPM("preview_offline_off.ppm", gBuf);
+  in.wifiOk = true;
+  in.offInMs = 0;
+
   // 设置页：音效网格 + 音量条（改布局常量后先看这张）
   in.page = 3;
   in.sndSlot = 0;

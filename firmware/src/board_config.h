@@ -23,6 +23,19 @@
 #define SCR_OFF_AFTER_IDLE_WALL_MS 1800000UL   // 墙插：30 分钟没输入 → 熄屏（≈显示器休眠）
 #define SCR_OFF_AFTER_IDLE_BATT_MS 600000UL    // 电池：10 分钟没输入 → 熄屏
 #define SCR_OFF_AFTER_NOLINK_MS 60000UL        // 断链 60 秒 → 熄屏（容忍短暂抖动）
+
+// 断链自动关机：Wi-Fi 还在、但一直拿不到桥接数据 = 电脑关了 / App 退了。
+// 熄屏只是省背光，芯片还在跑；超过这个时长就彻底睡下去（按 PWR 唤醒）。
+// 用 #ifndef 包着，方便 -D 覆盖成几十秒做实机验证。
+#ifndef DP_OFFLINE_POWEROFF_MS
+#define DP_OFFLINE_POWEROFF_MS 300000UL        // 5 分钟
+#endif
+// 验证用：只打日志不真的睡（否则板子睡下去要手动按键才能回来）
+#ifdef DP_OFFLINE_POWEROFF_DRYRUN
+#define DP_OFFLINE_DRYRUN 1
+#else
+#define DP_OFFLINE_DRYRUN 0
+#endif
 #define SCR_DIM_PERCENT 15                     // 暗档亮度
 #define SCR_WAKE_PEEK_MS 10000UL               // 熄屏后点一下，亮 10 秒
 #define SCR_OFF_FADE_MS 1500                   // 熄屏前先压到 5% 再灭，别瞬间黑

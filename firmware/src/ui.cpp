@@ -144,6 +144,13 @@ void statusBar(Canvas& c, const UiInput& in) {
     // 时间用桥接给的本地时间字符串，设备不需要知道时区
     const char* tm = (in.clockText && in.clockText[0]) ? in.clockText : "--:--";
     c.textAligned(168, 1, DP_W - padR - 168, tm, dpcolor::MUTED, 1, DP_RIGHT);
+  } else if (in.offInMs > 0) {
+    // 断链接满 5 分钟就自动关机了，把还剩多久写在原来 RETRY 的位置 ——
+    // 不然屏幕突然黑掉，人会以为坏了
+    char buf[16];
+    const unsigned left = (unsigned)(in.offInMs / 1000);
+    snprintf(buf, sizeof(buf), "OFF %u:%02u", left / 60, left % 60);
+    c.textAligned(120, 1, DP_W - padR - 120, buf, dpcolor::ERR, 1, DP_RIGHT);
   } else {
     c.textAligned(120, 1, DP_W - padR - 120, "RETRY", dpcolor::ERR, 1, DP_RIGHT);
   }

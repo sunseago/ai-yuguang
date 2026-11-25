@@ -26,6 +26,7 @@ static uint32_t gLastBeat = 0;
 static bool gDirty = true;
 static uint8_t gSndSlot = 0;    // 设置页正在编辑哪个音效槽：0=弹窗 1=完成
 static bool gVolFocus = false;  // 长按 PLUS 进来：高亮音量条
+static uint32_t gOffInMs = 0;   // 断链自动关机的剩余时间（0 = 不计时）
 static bool gLastOnline = false;
 static uint8_t gLastRot = 0;
 // ---- 提示音：只在"状态跨进 WAIT / DONE"的那一下响，不是每轮都响 ----
@@ -98,6 +99,7 @@ static void render() {
   in.doneSnd = audioDoneMode();
   in.volume = audioVolume();
   in.volFocus = gVolFocus;
+  in.offInMs = gOffInMs;
 
   uiRender(gCanvas, in);
   displayPush(gCanvas.buffer());
@@ -436,6 +438,32 @@ void loop() {
       float ax, ay, az, ip;
       imuLastSample(ax, ay, az, ip);
       Serial.printf("[dp] rotate=%u (%u deg) ax=%.2f ay=%.2f az=%.2f\n", r, r * 90u, ax, ay, az);
+    }
+  }
+
+  // ---- 断链自动关机 ----
+  // 只在「Wi-Fi 还连着、但拿不到桥接数据」时计时：那说明电脑关了或 App 退了。
+  // Wi-Fi 本身断了（改密码/没配网）不关机 —— 那种情况得让人看着屏幕去排查。
+  {
+    static uint32_t s_offlineSince = 0;   // 0 = 没在计时
+    if (gModel.bridgeOnline || !netOnline()) {
+      s_offlineSince = 0;
+      gOffInMs = 0;
+    } else {
+      const uint32_t nowMs = millis();
+      if (s_offlineSince == 0) s_offlineSince = nowMs;
+      const uint32_t offline = nowMs - s_offlineSince;
+      if (offline >= DP_OFFLINE_POWEROFF_MS) {
+        Serial.printf("[dp] bridge offline %lus -> power off\n",
+                      (unsigned long)(offline / 1000));
+#if DP_OFFLINE_DRYRUN
+        Serial.println("[dp] (dryrun: 不真的睡)");
+        s_offlineSince = nowMs;   // 重新计时，避免刷屏
+#else
+        powerOff();               // 不返回
+#endif
+      }
+      gOffInMs = DP_OFFLINE_POWEROFF_MS - offline;
     }
   }
 
